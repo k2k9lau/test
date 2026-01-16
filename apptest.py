@@ -1,11 +1,11 @@
 """
-交易數據分析系統 (Trading Analysis System) v2.2
-優化版本：
-- 移除所有 Sharpe Ratio
-- 新增 Box Plot 指標 (Q1, Median, Q3, IQR)
-- AID 交互優化（複製貼上）
-- Scalper 實時過濾 (Scalp% 門檻 + Scalp Profit 貢獻門檻)
-- 跨 Tab 指標一致化
+交易數據分析系統 (Trading Analysis System) v2.3
+深度優化版本：
+- 修復 AID 交互功能
+- 新增 4 大全局過濾器 (盈虧/勝率/Sharpe/MDD)
+- Scalp 盈虧金額門檻取代 Scalp Profit%
+- 全局佈局重排（放大圖表、並排顯示）
+- 統計摘要浮動說明欄
 """
 
 import streamlit as st
@@ -107,12 +107,13 @@ def classify_trading_style(hold_minutes):
         return '長線 (Swing)'
 
 
-# ==================== 統一英雄榜計算函數 (含 Box Plot 指標) ====================
+# ==================== 統一英雄榜計算函數 ====================
 def calculate_hero_metrics(data_df, initial_balance, scalper_threshold_seconds, 
-                           filter_positive=True, min_scalp_pct=None, min_scalp_profit_pct=None):
+                           filter_positive=True, min_scalp_pct=None, min_scalp_pl=None,
+                           min_pnl=None, min_winrate=None, min_sharpe=None, max_mdd=None):
     """
     統一計算英雄榜指標
-    欄位：AID | 盈虧 | Scalp盈虧 | Scalp% | Scalp Profit% | Q1 | Median | Q3 | IQR | P. Exp | PF | Rec.F | MDD% | 勝率%
+    包含：AID | 盈虧 | Scalp盈虧 | Scalp% | Sharpe | Q1 | Median | Q3 | IQR | P. Exp | PF | Rec.F | MDD% | 勝率% | 筆數
     """
     aid_col = COLUMN_MAP['aid']
     exec_col = COLUMN_MAP['execution_time']
@@ -139,20 +140,46 @@ def calculate_hero_metrics(data_df, initial_balance, scalper_threshold_seconds,
         scalp_count = len(scalp_trades)
         scalp_pl = scalp_trades['Net_PL'].sum() if not scalp_trades.empty else 0
         scalp_pct = (scalp_count / trade_count * 100) if trade_count > 0 else 0
-        scalp_profit_pct = (scalp_pl / net_pl * 100) if net_pl != 0 else 0
-        
-        # 篩選條件：Scalp% 門檻
-        if min_scalp_pct is not None and scalp_pct < min_scalp_pct:
-            continue
-        
-        # 篩選條件：Scalp Profit% 門檻
-        if min_scalp_profit_pct is not None and scalp_profit_pct < min_scalp_profit_pct:
-            continue
         
         # 勝率
         wins = (aid_data['Net_PL'] > 0).sum()
         losses = trade_count - wins
         win_rate = (wins / trade_count * 100) if trade_count > 0 else 0
+        
+        # Sharpe Ratio
+        if trade_count >= 3:
+            mean_pl = aid_data['Net_PL'].mean()
+            std_pl = aid_data['Net_PL'].std()
+            sharpe = mean_pl / std_pl if std_pl > 0 else 0
+        else:
+            sharpe = 0
+        
+        # MDD% 計算
+        aid_sorted = aid_data.sort_values(exec_col)
+        if len(aid_sorted) >= 2:
+            cumulative_pl = aid_sorted['Net_PL'].cumsum()
+            equity = initial_balance + cumulative_pl
+            running_max = equity.cummax()
+            drawdown = np.where(running_max != 0, (equity - running_max) / running_max * 100, 0)
+            mdd_pct = abs(np.min(drawdown))
+            max_dd_abs = abs((equity - running_max).min())
+        else:
+            mdd_pct = 0.0
+            max_dd_abs = 0.0
+        
+        # 應用過濾器
+        if min_scalp_pct is not None and scalp_pct < min_scalp_pct:
+            continue
+        if min_scalp_pl is not None and scalp_pl < min_scalp_pl:
+            continue
+        if min_pnl is not None and net_pl < min_pnl:
+            continue
+        if min_winrate is not None and win_rate < min_winrate:
+            continue
+        if min_sharpe is not None and sharpe < min_sharpe:
+            continue
+        if max_mdd is not None and mdd_pct > max_mdd:
+            continue
         
         # Box Plot 指標
         q1 = aid_data['Net_PL'].quantile(0.25)
@@ -174,28 +201,16 @@ def calculate_hero_metrics(data_df, initial_balance, scalper_threshold_seconds,
         total_losses = abs(loss_trades.sum()) if len(loss_trades) > 0 else 0
         pf = gains / total_losses if total_losses > 0 else (5.0 if gains > 0 else 0)
         
-        # MDD% 計算
-        aid_sorted = aid_data.sort_values(exec_col)
-        if len(aid_sorted) >= 2:
-            cumulative_pl = aid_sorted['Net_PL'].cumsum()
-            equity = initial_balance + cumulative_pl
-            running_max = equity.cummax()
-            drawdown = np.where(running_max != 0, (equity - running_max) / running_max * 100, 0)
-            mdd_pct = abs(np.min(drawdown))
-            max_dd_abs = abs((equity - running_max).min())
-        else:
-            mdd_pct = 0.0
-            max_dd_abs = 0.0
-        
         # Recovery Factor
         rec_f = net_pl / max_dd_abs if max_dd_abs > 0 else (net_pl if net_pl > 0 else 0)
         
         results.append({
-            'AID': str(aid),  # 純文字格式
+            'AID': str(aid),
             '盈虧': round(net_pl, 2),
             'Scalp盈虧': round(scalp_pl, 2),
             'Scalp%': round(scalp_pct, 2),
-            'Scalp Profit%': round(scalp_profit_pct, 2),
+            'Sharpe': round(sharpe, 2),
+            'MDD%': round(mdd_pct, 2),
             'Q1': round(q1, 2),
             'Median': round(median, 2),
             'Q3': round(q3, 2),
@@ -203,7 +218,6 @@ def calculate_hero_metrics(data_df, initial_balance, scalper_threshold_seconds,
             'P. Exp': round(p_exp, 2),
             'PF': round(pf, 2),
             'Rec.F': round(rec_f, 2),
-            'MDD%': round(mdd_pct, 2),
             '勝率%': round(win_rate, 2),
             '筆數': trade_count
         })
@@ -222,50 +236,73 @@ def format_hero_table_display(hero_df):
     display_df = hero_df.copy()
     
     # Scalp% emoji
-    display_df['Scalp%'] = display_df['Scalp%'].apply(lambda x: f"🔥 {x:.1f}%" if x > 80 else f"{x:.1f}%")
+    display_df['Scalp%'] = display_df['Scalp%'].apply(lambda x: f"🔥{x:.1f}%" if x > 80 else f"{x:.1f}%")
     
-    # Scalp Profit% emoji
-    display_df['Scalp Profit%'] = display_df['Scalp Profit%'].apply(lambda x: f"💰 {x:.1f}%" if x > 80 else f"{x:.1f}%")
-    
-    # P.Exp 顏色
-    display_df['P. Exp'] = display_df['P. Exp'].apply(lambda x: f"🟢 {x:.2f}" if x > 0 else f"🔴 {x:.2f}")
+    # Sharpe 顏色
+    display_df['Sharpe'] = display_df['Sharpe'].apply(lambda x: f"⭐{x:.2f}" if x > 2 else f"{x:.2f}")
     
     # MDD% 紅色警示
-    display_df['MDD%'] = display_df['MDD%'].apply(lambda x: f"🔴 {x:.1f}%" if x > 20 else f"{x:.1f}%")
+    display_df['MDD%'] = display_df['MDD%'].apply(lambda x: f"🔴{x:.1f}%" if x > 20 else f"{x:.1f}%")
+    
+    # P.Exp 顏色
+    display_df['P. Exp'] = display_df['P. Exp'].apply(lambda x: f"🟢{x:.2f}" if x > 0 else f"🔴{x:.2f}")
     
     # 金額格式
-    display_df['盈虧'] = display_df['盈虧'].apply(lambda x: f"${x:,.2f}")
-    display_df['Scalp盈虧'] = display_df['Scalp盈虧'].apply(lambda x: f"${x:,.2f}")
-    display_df['Q1'] = display_df['Q1'].apply(lambda x: f"${x:,.2f}")
-    display_df['Median'] = display_df['Median'].apply(lambda x: f"${x:,.2f}")
-    display_df['Q3'] = display_df['Q3'].apply(lambda x: f"${x:,.2f}")
-    display_df['IQR'] = display_df['IQR'].apply(lambda x: f"${x:,.2f}")
+    for col in ['盈虧', 'Scalp盈虧', 'Q1', 'Median', 'Q3', 'IQR']:
+        display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}")
     
     return display_df
 
 
 def get_table_column_config():
-    """獲取統一的表格欄位配置"""
+    """獲取統一的表格欄位配置 - 確保 AID 為純文字可複製"""
     return {
-        'AID': st.column_config.TextColumn('AID', help='點擊可複製'),
-        '盈虧': st.column_config.TextColumn('盈虧'),
-        'Scalp盈虧': st.column_config.TextColumn('Scalp盈虧'),
-        'Scalp%': st.column_config.TextColumn('Scalp%'),
-        'Scalp Profit%': st.column_config.TextColumn('Scalp Profit%'),
-        'Q1': st.column_config.TextColumn('Q1 (25th)'),
-        'Median': st.column_config.TextColumn('Median'),
-        'Q3': st.column_config.TextColumn('Q3 (75th)'),
-        'IQR': st.column_config.TextColumn('IQR'),
-        'P. Exp': st.column_config.TextColumn('P. Exp'),
-        'PF': st.column_config.NumberColumn('PF', format='%.2f'),
-        'Rec.F': st.column_config.NumberColumn('Rec.F', format='%.2f'),
-        'MDD%': st.column_config.TextColumn('MDD%'),
-        '勝率%': st.column_config.NumberColumn('勝率%', format='%.1f%%'),
-        '筆數': st.column_config.NumberColumn('筆數', format='%d')
+        'AID': st.column_config.TextColumn('AID', help='點擊單元格可選取複製', width='small'),
+        '盈虧': st.column_config.TextColumn('盈虧', width='medium'),
+        'Scalp盈虧': st.column_config.TextColumn('Scalp盈虧', width='medium'),
+        'Scalp%': st.column_config.TextColumn('Scalp%', width='small'),
+        'Sharpe': st.column_config.TextColumn('Sharpe', width='small'),
+        'MDD%': st.column_config.TextColumn('MDD%', width='small'),
+        'Q1': st.column_config.TextColumn('Q1', width='small'),
+        'Median': st.column_config.TextColumn('Median', width='small'),
+        'Q3': st.column_config.TextColumn('Q3', width='small'),
+        'IQR': st.column_config.TextColumn('IQR', width='small'),
+        'P. Exp': st.column_config.TextColumn('P.Exp', width='small'),
+        'PF': st.column_config.NumberColumn('PF', format='%.2f', width='small'),
+        'Rec.F': st.column_config.NumberColumn('Rec.F', format='%.2f', width='small'),
+        '勝率%': st.column_config.NumberColumn('勝率%', format='%.1f%%', width='small'),
+        '筆數': st.column_config.NumberColumn('筆數', format='%d', width='small')
     }
 
 
-# ==================== 產品堆疊柱狀圖計算 ====================
+def render_global_filters(key_prefix, default_pnl=0, default_winrate=0, default_sharpe=-10, default_mdd=100):
+    """渲染全局過濾器"""
+    st.markdown("#### 🔧 全局過濾器")
+    f1, f2, f3, f4 = st.columns(4)
+    
+    with f1:
+        min_pnl = st.number_input("最低盈虧 ($)", value=default_pnl, step=100, key=f"{key_prefix}_pnl", help="僅顯示盈虧 ≥ 此值的客戶")
+    with f2:
+        min_winrate = st.number_input("最低勝率 (%)", value=default_winrate, min_value=0, max_value=100, step=5, key=f"{key_prefix}_wr", help="僅顯示勝率 ≥ 此值的客戶")
+    with f3:
+        min_sharpe = st.number_input("最低 Sharpe", value=default_sharpe, step=0.5, key=f"{key_prefix}_sharpe", help="僅顯示 Sharpe ≥ 此值的客戶")
+    with f4:
+        max_mdd = st.number_input("最高 MDD (%)", value=default_mdd, min_value=0, max_value=100, step=5, key=f"{key_prefix}_mdd", help="僅顯示 MDD ≤ 此值的客戶")
+    
+    return min_pnl, min_winrate, min_sharpe, max_mdd
+
+
+def render_scalper_filters(key_prefix, default_scalp_pct=80, default_scalp_pl=0):
+    """渲染 Scalper 專用過濾器"""
+    s1, s2 = st.columns(2)
+    with s1:
+        min_scalp_pct = st.slider("Scalp% 門檻", min_value=50, max_value=100, value=default_scalp_pct, step=5, key=f"{key_prefix}_spct", help="Scalp 交易筆數佔比")
+    with s2:
+        min_scalp_pl = st.number_input("Scalp 盈虧金額門檻 ($)", value=default_scalp_pl, step=100, key=f"{key_prefix}_spl", help="Scalp 盈虧總額")
+    return min_scalp_pct, min_scalp_pl
+
+
+# ==================== 產品堆疊柱狀圖 ====================
 def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
     instrument_col = COLUMN_MAP['instrument']
     closing_df = filter_closing_trades(day_df)
@@ -276,27 +313,16 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
     results = []
     for product in closing_df[instrument_col].unique():
         prod_data = closing_df[closing_df[instrument_col] == product]
-        
         total_pl = prod_data['Net_PL'].sum()
-        
         scalp_trades = prod_data[prod_data['Hold_Seconds'] < scalper_threshold_seconds]
         non_scalp_trades = prod_data[prod_data['Hold_Seconds'] >= scalper_threshold_seconds]
-        
         scalp_pl = scalp_trades['Net_PL'].sum() if not scalp_trades.empty else 0
         non_scalp_pl = non_scalp_trades['Net_PL'].sum() if not non_scalp_trades.empty else 0
-        
         scalp_pct = (len(scalp_trades) / len(prod_data) * 100) if len(prod_data) > 0 else 0
         
-        results.append({
-            'Product': product,
-            'Total_PL': total_pl,
-            'Scalp_PL': scalp_pl,
-            'NonScalp_PL': non_scalp_pl,
-            'Scalp_Pct': scalp_pct
-        })
+        results.append({'Product': product, 'Total_PL': total_pl, 'Scalp_PL': scalp_pl, 'NonScalp_PL': non_scalp_pl, 'Scalp_Pct': scalp_pct})
     
     result_df = pd.DataFrame(results)
-    
     profit_products = result_df[result_df['Total_PL'] > 0].nlargest(5, 'Total_PL')
     loss_products = result_df[result_df['Total_PL'] < 0].nsmallest(5, 'Total_PL')
     
@@ -308,34 +334,18 @@ def create_stacked_product_chart(product_df, is_profit=True):
         return None
     
     df = product_df.copy()
-    
     if is_profit:
-        non_scalp_color = '#1E8449'
-        scalp_color = '#82E0AA'
+        non_scalp_color, scalp_color = '#1E8449', '#82E0AA'
         title = '📈 當日盈利產品 Top 5'
     else:
-        non_scalp_color = '#922B21'
-        scalp_color = '#F1948A'
+        non_scalp_color, scalp_color = '#922B21', '#F1948A'
         title = '📉 當日虧損產品 Top 5'
     
     df = df.sort_values('Total_PL', ascending=not is_profit)
     
     fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        y=df['Product'], x=df['NonScalp_PL'], name='Non-Scalp', orientation='h',
-        marker_color=non_scalp_color, text=df['NonScalp_PL'].apply(lambda x: f"${x:,.0f}"), textposition='inside',
-        customdata=df[['Total_PL', 'Scalp_Pct']].values,
-        hovertemplate='<b>%{y}</b><br>Non-Scalp: $%{x:,.2f}<br>總盈虧: $%{customdata[0]:,.2f}<br>Scalp%: %{customdata[1]:.1f}%<extra></extra>'
-    ))
-    
-    fig.add_trace(go.Bar(
-        y=df['Product'], x=df['Scalp_PL'], name='Scalp', orientation='h',
-        marker_color=scalp_color, text=df['Scalp_PL'].apply(lambda x: f"${x:,.0f}"), textposition='inside',
-        customdata=df[['Total_PL', 'Scalp_Pct']].values,
-        hovertemplate='<b>%{y}</b><br>Scalp: $%{x:,.2f}<br>總盈虧: $%{customdata[0]:,.2f}<br>Scalp%: %{customdata[1]:.1f}%<extra></extra>'
-    ))
-    
+    fig.add_trace(go.Bar(y=df['Product'], x=df['NonScalp_PL'], name='Non-Scalp', orientation='h', marker_color=non_scalp_color, text=df['NonScalp_PL'].apply(lambda x: f"${x:,.0f}"), textposition='inside'))
+    fig.add_trace(go.Bar(y=df['Product'], x=df['Scalp_PL'], name='Scalp', orientation='h', marker_color=scalp_color, text=df['Scalp_PL'].apply(lambda x: f"${x:,.0f}"), textposition='inside'))
     fig.update_layout(title=title, barmode='relative', xaxis_title='盈虧金額 ($)', height=300, legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(248,249,250,1)')
     fig.add_vline(x=0, line_color="black", line_width=1)
     
@@ -371,10 +381,15 @@ def calculate_all_aid_stats_realtime(df, initial_balance, scalper_threshold_seco
         scalper_ratio = (scalper_count / trade_count * 100) if trade_count > 0 else 0
         scalper_pl = scalper_trades['Net_PL'].sum() if not scalper_trades.empty else 0
         
-        # Box Plot 指標
         q1 = aid_data['Net_PL'].quantile(0.25)
         median = aid_data['Net_PL'].median()
         q3 = aid_data['Net_PL'].quantile(0.75)
+        
+        # Sharpe
+        if trade_count >= 3:
+            sharpe = aid_data['Net_PL'].mean() / aid_data['Net_PL'].std() if aid_data['Net_PL'].std() > 0 else 0
+        else:
+            sharpe = 0
         
         aid_sorted = aid_data.sort_values(exec_col)
         if len(aid_sorted) >= 2:
@@ -401,6 +416,7 @@ def calculate_all_aid_stats_realtime(df, initial_balance, scalper_threshold_seco
             'Avg_Hold_Seconds': round(avg_hold_seconds, 2), 'MDD_Pct': round(mdd_pct, 2),
             'Profit_Factor': round(profit_factor, 2), 'Scalper_Count': scalper_count,
             'Scalper_Ratio': round(scalper_ratio, 2), 'Scalper_PL': round(scalper_pl, 2),
+            'Sharpe': round(sharpe, 2),
             'Q1': round(q1, 2), 'Median': round(median, 2), 'Q3': round(q3, 2),
             'Main_Symbol': main_symbol
         })
@@ -417,7 +433,6 @@ def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
     total_minutes = client_df['Hold_Minutes'].sum() if 'Hold_Minutes' in client_df.columns else 0
     total_minutes = total_minutes if pd.notna(total_minutes) else 0
     
-    # 連續盈虧分析
     pnl_signs = (client_df['Net_PL'] > 0).astype(int)
     streaks = []
     current_streak = 1
@@ -435,7 +450,6 @@ def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
     
     win_streaks = [s[1] for s in streaks if s[0] == 1]
     loss_streaks = [s[1] for s in streaks if s[0] == 0]
-    
     max_win_streak = max(win_streaks) if win_streaks else 0
     max_loss_streak = max(loss_streaks) if loss_streaks else 0
     
@@ -445,24 +459,19 @@ def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
     max_streak_profit = streak_sums.max() if not streak_sums.empty else 0
     max_streak_loss = streak_sums.min() if not streak_sums.empty else 0
     
-    # 多空拆解
     buy_trades = client_df[client_df[side_col] == 'BUY'] if side_col in client_df.columns else pd.DataFrame()
     sell_trades = client_df[client_df[side_col] == 'SELL'] if side_col in client_df.columns else pd.DataFrame()
     
-    buy_count = len(buy_trades)
-    sell_count = len(sell_trades)
+    buy_count, sell_count = len(buy_trades), len(sell_trades)
     buy_ratio = (buy_count / total_trades * 100) if total_trades > 0 else 0
     sell_ratio = (sell_count / total_trades * 100) if total_trades > 0 else 0
-    
     buy_pl = buy_trades['Net_PL'].sum() if not buy_trades.empty else 0
     sell_pl = sell_trades['Net_PL'].sum() if not sell_trades.empty else 0
-    
     buy_wins = (buy_trades['Net_PL'] > 0).sum() if not buy_trades.empty else 0
     sell_wins = (sell_trades['Net_PL'] > 0).sum() if not sell_trades.empty else 0
     buy_winrate = (buy_wins / buy_count * 100) if buy_count > 0 else 0
     sell_winrate = (sell_wins / sell_count * 100) if sell_count > 0 else 0
     
-    # 剝頭皮分析
     scalp_trades = client_df[client_df['Hold_Seconds'] < scalper_threshold_seconds]
     scalp_count = len(scalp_trades)
     scalp_ratio = (scalp_count / total_trades * 100) if total_trades > 0 else 0
@@ -471,20 +480,15 @@ def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
     scalp_wins = (scalp_trades['Net_PL'] > 0).sum() if not scalp_trades.empty else 0
     scalp_winrate = (scalp_wins / scalp_count * 100) if scalp_count > 0 else 0
     
-    # Box Plot 指標
     q1 = client_df['Net_PL'].quantile(0.25)
     median = client_df['Net_PL'].median()
     q3 = client_df['Net_PL'].quantile(0.75)
     iqr = q3 - q1
     
-    # 時間效率
     avg_minutes = total_minutes / total_trades if total_trades > 0 else 0
     profit_per_minute = total_pl / total_minutes if total_minutes > 0 else 0
-    
     avg_seconds = avg_minutes * 60
-    hours = int(avg_seconds // 3600)
-    minutes = int((avg_seconds % 3600) // 60)
-    seconds = int(avg_seconds % 60)
+    hours, minutes, seconds = int(avg_seconds // 3600), int((avg_seconds % 3600) // 60), int(avg_seconds % 60)
     avg_hold_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     avg_hold_days = avg_minutes / 1440
     
@@ -533,9 +537,60 @@ def create_cumulative_pnl_chart(df, initial_balance, scalper_threshold_seconds):
     fig.add_trace(go.Scatter(x=merged_df['Date'], y=merged_df['Cumulative_PL'], mode='lines+markers', name='整體累計', line=dict(color='#2E86AB', width=2.5)))
     fig.add_trace(go.Scatter(x=merged_df['Date'], y=merged_df['Scalper_Cumulative_PL'], mode='lines+markers', name=f'Scalper (<{scalper_minutes:.0f}分鐘)', line=dict(color='#F39C12', width=2.5, dash='dot')))
     fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.5)
-    fig.update_layout(title='📈 累計淨盈虧走勢', xaxis_title='日期', yaxis_title='累計淨盈虧 ($)', height=400, legend=dict(orientation="h", y=1.02), plot_bgcolor='rgba(248,249,250,1)')
+    fig.update_layout(title='📈 累計淨盈虧走勢', xaxis_title='日期', yaxis_title='累計淨盈虧 ($)', height=450, legend=dict(orientation="h", y=1.02), plot_bgcolor='rgba(248,249,250,1)')
     
     return fig, {'total_pnl': merged_df['Cumulative_PL'].iloc[-1] if len(merged_df) > 0 else 0, 'scalper_pnl': merged_df['Scalper_Cumulative_PL'].iloc[-1] if len(merged_df) > 0 else 0}
+
+
+def create_violin_plot_with_stats(df):
+    """創建小提琴圖並返回統計數據"""
+    aid_col = COLUMN_MAP['aid']
+    closing_df = filter_closing_trades(df)
+    aid_pl = closing_df.groupby(aid_col)['Net_PL'].sum().reset_index()
+    aid_pl.columns = ['AID', 'Net_PL']
+    
+    # 統計數據
+    stats = {
+        'count': len(aid_pl),
+        'mean': aid_pl['Net_PL'].mean(),
+        'median': aid_pl['Net_PL'].median(),
+        'std': aid_pl['Net_PL'].std(),
+        'q1': aid_pl['Net_PL'].quantile(0.25),
+        'q3': aid_pl['Net_PL'].quantile(0.75),
+        'min': aid_pl['Net_PL'].min(),
+        'max': aid_pl['Net_PL'].max(),
+        'profitable': (aid_pl['Net_PL'] > 0).sum(),
+        'losing': (aid_pl['Net_PL'] <= 0).sum()
+    }
+    stats['iqr'] = stats['q3'] - stats['q1']
+    stats['lower_fence'] = stats['q1'] - 1.5 * stats['iqr']
+    stats['upper_fence'] = stats['q3'] + 1.5 * stats['iqr']
+    stats['outliers'] = len(aid_pl[(aid_pl['Net_PL'] < stats['lower_fence']) | (aid_pl['Net_PL'] > stats['upper_fence'])])
+    
+    Q1_pct = aid_pl['Net_PL'].quantile(0.01)
+    Q99_pct = aid_pl['Net_PL'].quantile(0.99)
+    
+    fig = go.Figure()
+    fig.add_trace(go.Violin(
+        x=aid_pl['Net_PL'], y=['盈虧分布'] * len(aid_pl), orientation='h',
+        box_visible=True, meanline_visible=True, line_color='#2C3E50',
+        fillcolor='rgba(52, 152, 219, 0.5)', points='all', pointpos=-0.5, jitter=0.3,
+        marker=dict(color='#3498DB', size=6, opacity=0.6),
+        customdata=aid_pl['AID'].values,
+        hovertemplate='<b>AID:</b> %{customdata}<br><b>Net_PL:</b> $%{x:,.2f}<extra></extra>'
+    ))
+    
+    x_padding = (Q99_pct - Q1_pct) * 0.1
+    fig.add_vline(x=0, line_color="black", line_width=3)
+    fig.update_layout(
+        title='🎻 客戶盈虧分佈 (Violin Plot)',
+        height=700,
+        xaxis=dict(title='累計淨盈虧 ($)', range=[Q1_pct - x_padding, Q99_pct + x_padding]),
+        yaxis=dict(showticklabels=False),
+        plot_bgcolor='rgba(248,249,250,1)'
+    )
+    
+    return fig, stats
 
 
 def create_trading_style_pie(df, title="交易風格分佈"):
@@ -550,25 +605,7 @@ def create_trading_style_pie(df, title="交易風格分佈"):
     
     fig = px.pie(style_counts, values='筆數', names='風格', hole=0.4, color='風格', color_discrete_map=STYLE_COLORS, title=title)
     fig.update_traces(textposition='inside', textinfo='label+percent')
-    fig.update_layout(height=350, legend=dict(orientation="h", y=-0.15))
-    return fig
-
-
-def create_violin_plot_horizontal(df):
-    aid_col = COLUMN_MAP['aid']
-    closing_df = filter_closing_trades(df)
-    aid_pl = closing_df.groupby(aid_col)['Net_PL'].sum().reset_index()
-    aid_pl.columns = ['AID', 'Net_PL']
-    
-    Q1_pct = aid_pl['Net_PL'].quantile(0.01)
-    Q99_pct = aid_pl['Net_PL'].quantile(0.99)
-    
-    fig = go.Figure()
-    fig.add_trace(go.Violin(x=aid_pl['Net_PL'], y=['盈虧分布'] * len(aid_pl), orientation='h', box_visible=True, meanline_visible=True, line_color='#2C3E50', fillcolor='rgba(52, 152, 219, 0.5)', points='all', pointpos=-0.5, jitter=0.3, marker=dict(color='#3498DB', size=5, opacity=0.5), customdata=aid_pl['AID'].values, hovertemplate='<b>AID:</b> %{customdata}<br><b>Net_PL:</b> $%{x:,.2f}<extra></extra>'))
-    
-    x_padding = (Q99_pct - Q1_pct) * 0.1
-    fig.add_vline(x=0, line_color="black", line_width=3)
-    fig.update_layout(title='🎻 盈虧分佈', height=400, xaxis=dict(title='累計淨盈虧 ($)', range=[Q1_pct - x_padding, Q99_pct + x_padding]), yaxis=dict(showticklabels=False), plot_bgcolor='rgba(248,249,250,1)')
+    fig.update_layout(height=400, legend=dict(orientation="h", y=-0.15))
     return fig
 
 
@@ -587,10 +624,9 @@ def create_profit_factor_chart_colored(aid_stats_df):
         fig.add_trace(go.Bar(x=[row['PF_Bin_Str']], y=[row['Count']], marker=dict(color=row['Color'], opacity=0.75), showlegend=False))
     
     fig.add_vline(x=1.5, line_dash="dash", line_color="red", line_width=2, annotation_text="PF=1.0")
-    fig.update_layout(title='📊 獲利因子分布', xaxis=dict(title='Profit Factor', tickangle=-45), yaxis_title='交易者數量', height=350, plot_bgcolor='rgba(248,249,250,1)')
+    fig.update_layout(title='📊 獲利因子分布', xaxis=dict(title='Profit Factor', tickangle=-45), yaxis_title='交易者數', height=400, plot_bgcolor='rgba(248,249,250,1)')
     
     profitable_ratio = (pf_data['Profit_Factor'] > 1.0).sum() / len(pf_data) * 100 if len(pf_data) > 0 else 0
-    
     return fig, profitable_ratio
 
 
@@ -603,10 +639,22 @@ def create_risk_return_scatter(aid_stats_df, initial_balance):
         scatter_df['Size'] = 20
     
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=scatter_df['MDD_Pct'], y=scatter_df['Net_PL'], mode='markers', marker=dict(size=scatter_df['Size'], color=scatter_df['Net_PL'], colorscale=['#E74C3C', '#F39C12', '#27AE60'], showscale=True), customdata=np.column_stack((scatter_df['AID'], scatter_df['Win_Rate'])), hovertemplate='<b>AID:</b> %{customdata[0]}<br><b>淨盈虧:</b> $%{y:,.2f}<br><b>MDD:</b> %{x:.1f}%<extra></extra>'))
-    fig.update_layout(title=f'🎯 風險回報矩陣 (初始資金: ${initial_balance:,})', xaxis=dict(title='MDD (%)', range=[0, 100]), yaxis_title='總盈虧 ($)', height=400, plot_bgcolor='rgba(248,249,250,1)')
+    fig.add_trace(go.Scatter(
+        x=scatter_df['MDD_Pct'], y=scatter_df['Net_PL'], mode='markers',
+        marker=dict(size=scatter_df['Size'], color=scatter_df['Net_PL'], colorscale=['#E74C3C', '#F39C12', '#27AE60'], showscale=True, colorbar=dict(title='盈虧')),
+        customdata=np.column_stack((scatter_df['AID'], scatter_df['Win_Rate'], scatter_df['Sharpe'])),
+        hovertemplate='<b>AID:</b> %{customdata[0]}<br><b>淨盈虧:</b> $%{y:,.2f}<br><b>MDD:</b> %{x:.1f}%<br><b>勝率:</b> %{customdata[1]:.1f}%<br><b>Sharpe:</b> %{customdata[2]:.2f}<extra></extra>'
+    ))
+    fig.update_layout(title=f'🎯 風險回報矩陣 (初始資金: ${initial_balance:,})', xaxis=dict(title='MDD (%)', range=[0, 100]), yaxis_title='總盈虧 ($)', height=700, plot_bgcolor='rgba(248,249,250,1)')
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
     fig.add_vline(x=50, line_dash="dash", line_color="gray")
+    
+    # 象限標註
+    fig.add_annotation(x=10, y=0.95, xref="x", yref="paper", text="🌟 低風險高回報", showarrow=False, font=dict(size=12, color="green"))
+    fig.add_annotation(x=90, y=0.95, xref="x", yref="paper", text="⚡ 高風險高回報", showarrow=False, font=dict(size=12, color="orange"))
+    fig.add_annotation(x=10, y=0.05, xref="x", yref="paper", text="🐢 低風險低回報", showarrow=False, font=dict(size=12, color="gray"))
+    fig.add_annotation(x=90, y=0.05, xref="x", yref="paper", text="⚠️ 高風險虧損", showarrow=False, font=dict(size=12, color="red"))
+    
     return fig
 
 
@@ -622,7 +670,7 @@ def create_daily_pnl_chart(df):
     fig = go.Figure()
     fig.add_trace(go.Bar(x=daily_pnl['日期'], y=daily_pnl['每日盈虧'], marker_color=colors))
     fig.add_hline(y=0, line_color="black", line_width=1)
-    fig.update_layout(title='📅 每日盈虧', xaxis_title='日期', yaxis_title='淨盈虧 ($)', height=300, plot_bgcolor='rgba(248,249,250,1)')
+    fig.update_layout(title='📅 每日盈虧', xaxis_title='日期', yaxis_title='淨盈虧 ($)', height=350, plot_bgcolor='rgba(248,249,250,1)')
     return fig
 
 
@@ -632,7 +680,7 @@ def create_client_cumulative_chart(cumulative_df, scalper_minutes):
     fig.add_trace(go.Scatter(x=cumulative_df[exec_col], y=cumulative_df['Cumulative_PL'], mode='lines', name='累計總盈虧', line=dict(color='#2E86AB', width=2)))
     fig.add_trace(go.Scatter(x=cumulative_df[exec_col], y=cumulative_df['Scalper_Cumulative_PL'], mode='lines', name=f'Scalper (<{scalper_minutes}分鐘)', line=dict(color='#F39C12', width=2, dash='dot')))
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
-    fig.update_layout(title='📈 個人累計盈虧走勢', height=300, legend=dict(orientation="h", y=1.05), plot_bgcolor='rgba(248,249,250,1)')
+    fig.update_layout(title='📈 個人累計盈虧', height=350, legend=dict(orientation="h", y=1.05), plot_bgcolor='rgba(248,249,250,1)')
     return fig
 
 
@@ -658,7 +706,9 @@ def get_client_details(df, aid, initial_balance, scalper_threshold_seconds):
     losses = abs(client_df[client_df[closed_pl_col] < 0][closed_pl_col].sum())
     profit_factor = gains / losses if losses > 0 else (5.0 if gains > 0 else 0)
     
-    # MDD%
+    # Sharpe
+    sharpe = client_df['Net_PL'].mean() / client_df['Net_PL'].std() if client_df['Net_PL'].std() > 0 and trade_count >= 3 else 0
+    
     aid_sorted = client_df.sort_values(exec_col)
     if len(aid_sorted) >= 2:
         cumulative_pl = aid_sorted['Net_PL'].cumsum()
@@ -686,19 +736,17 @@ def get_client_details(df, aid, initial_balance, scalper_threshold_seconds):
     return {
         'net_pl': net_pl, 'trade_count': trade_count, 'win_rate': win_rate,
         'avg_hold_seconds': avg_hold_seconds, 'profit_factor': profit_factor,
-        'mdd_pct': mdd_pct,
+        'sharpe': sharpe, 'mdd_pct': mdd_pct,
         'cumulative_df': client_sorted[[exec_col, 'Cumulative_PL', 'Scalper_Cumulative_PL']],
         'symbol_dist': symbol_dist, 'client_df': client_df, 'behavioral': behavioral_stats
     }
 
 
 def get_client_ranking(aid_stats_df, aid, metric='Net_PL'):
-    """獲取客戶排名"""
     sorted_df = aid_stats_df.sort_values(metric, ascending=False).reset_index(drop=True)
     try:
         rank = sorted_df[sorted_df['AID'] == str(aid)].index[0] + 1
-        total = len(sorted_df)
-        return rank, total
+        return rank, len(sorted_df)
     except:
         return None, len(sorted_df)
 
@@ -709,15 +757,12 @@ def export_to_excel(df, aid_stats_df, initial_balance, scalper_threshold_seconds
     closing_df = filter_closing_trades(df)
     aid_col = COLUMN_MAP['aid']
     
-    summary_data = [['指標', '數值'], ['總交易筆數', len(df)], ['平倉交易筆數', len(closing_df)], ['總客戶數', df[aid_col].nunique()], ['總淨盈虧', round(closing_df['Net_PL'].sum(), 2)], ['初始資金', initial_balance]]
-    summary_df = pd.DataFrame(summary_data[1:], columns=summary_data[0])
-    
-    risk_return_df = aid_stats_df[['AID', 'Net_PL', 'MDD_Pct', 'Trade_Count', 'Win_Rate', 'Profit_Factor', 'Scalper_Ratio', 'Q1', 'Median', 'Q3']].sort_values('Net_PL', ascending=False)
+    summary_df = pd.DataFrame([['總交易筆數', len(df)], ['平倉交易筆數', len(closing_df)], ['總客戶數', df[aid_col].nunique()], ['總淨盈虧', round(closing_df['Net_PL'].sum(), 2)], ['初始資金', initial_balance]], columns=['指標', '數值'])
+    risk_return_df = aid_stats_df[['AID', 'Net_PL', 'MDD_Pct', 'Sharpe', 'Trade_Count', 'Win_Rate', 'Profit_Factor', 'Scalper_Ratio', 'Q1', 'Median', 'Q3']].sort_values('Net_PL', ascending=False)
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         summary_df.to_excel(writer, sheet_name='Summary', index=False)
         risk_return_df.to_excel(writer, sheet_name='Risk_Return', index=False)
-        
         header_font = Font(bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='2E86AB', end_color='2E86AB', fill_type='solid')
         for sheet_name in writer.sheets:
@@ -733,29 +778,27 @@ def export_to_excel(df, aid_stats_df, initial_balance, scalper_threshold_seconds
 
 # ==================== 主程式 ====================
 def main():
-    st.title("📊 交易數據分析系統 v2.2")
-    st.markdown("**Box Plot 指標 | Scalper 實時過濾 | AID 快速切換**")
+    st.title("📊 交易數據分析系統 v2.3")
+    st.markdown("**全局過濾器 | AID 快速交互 | 放大圖表佈局**")
     
     with st.sidebar:
-        st.header("⚙️ 全域參數設定")
+        st.header("⚙️ 全域參數")
         initial_balance = st.number_input("💰 初始資金", value=10000, min_value=0, step=1000)
-        scalper_minutes = st.number_input("⏱️ Scalper 定義 (分鐘)", value=5, min_value=1, max_value=60, step=1)
+        scalper_minutes = st.number_input("⏱️ Scalper (分鐘)", value=5, min_value=1, max_value=60, step=1)
         scalper_threshold_seconds = scalper_minutes * 60
         
         st.markdown("---")
         st.header("📁 數據上傳")
-        uploaded_files = st.file_uploader("上傳交易數據檔案", type=['xlsx', 'csv'], accept_multiple_files=True)
+        uploaded_files = st.file_uploader("上傳交易數據", type=['xlsx', 'csv'], accept_multiple_files=True)
         
         if uploaded_files:
-            st.success(f"已上傳 {len(uploaded_files)} 個檔案")
-            st.info(f"💰 初始資金: **${initial_balance:,}**")
-            st.info(f"⏱️ Scalper: **<{scalper_minutes} 分鐘**")
+            st.success(f"✅ 已上傳 {len(uploaded_files)} 個檔案")
     
     if not uploaded_files:
-        st.info("👈 請在左側上傳交易數據檔案開始分析")
+        st.info("👈 請在左側上傳交易數據檔案")
         return
     
-    with st.spinner("正在載入數據..."):
+    with st.spinner("載入數據中..."):
         df = load_and_preprocess(uploaded_files)
     
     if df is None or df.empty:
@@ -764,7 +807,7 @@ def main():
     
     display_df = df.copy()
     
-    with st.spinner("正在計算統計數據..."):
+    with st.spinner("計算統計中..."):
         aid_stats_df = calculate_all_aid_stats_realtime(display_df, initial_balance, scalper_threshold_seconds)
     
     st.markdown("---")
@@ -773,8 +816,8 @@ def main():
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("總交易筆數", f"{len(display_df):,}")
-    col2.metric("平倉交易筆數", f"{len(closing_df):,}")
-    col3.metric("交易者數量", f"{display_df[aid_col].nunique():,}")
+    col2.metric("平倉交易", f"{len(closing_df):,}")
+    col3.metric("客戶數", f"{display_df[aid_col].nunique():,}")
     col4.metric("總淨盈虧", f"${closing_df['Net_PL'].sum():,.2f}")
     
     with st.sidebar:
@@ -788,65 +831,106 @@ def main():
     with tab1:
         st.header("📊 整體數據概覽")
         
+        # 累計走勢圖
         cumulative_fig, pnl_stats = create_cumulative_pnl_chart(display_df, initial_balance, scalper_threshold_seconds)
         st.plotly_chart(cumulative_fig, use_container_width=True)
         
-        c1, c2 = st.columns(2)
-        c1.metric("整體淨盈虧", f"${pnl_stats['total_pnl']:,.2f}")
-        c2.metric(f"Scalper 淨盈虧", f"${pnl_stats['scalper_pnl']:,.2f}")
+        m1, m2 = st.columns(2)
+        m1.metric("整體淨盈虧", f"${pnl_stats['total_pnl']:,.2f}")
+        m2.metric("Scalper 淨盈虧", f"${pnl_stats['scalper_pnl']:,.2f}")
         
         st.markdown("---")
-        col_v, col_s = st.columns(2)
-        with col_v:
-            st.plotly_chart(create_violin_plot_horizontal(display_df), use_container_width=True)
-        with col_s:
+        
+        # 獲利因子 + 交易風格 並排
+        st.markdown("### 📊 獲利因子 & 交易風格")
+        pf_col, style_col = st.columns(2)
+        with pf_col:
+            pf_fig, profitable_ratio = create_profit_factor_chart_colored(aid_stats_df)
+            st.plotly_chart(pf_fig, use_container_width=True)
+            st.success(f"PF > 1.0 佔比: {profitable_ratio:.1f}%")
+        with style_col:
             style_pie = create_trading_style_pie(display_df, "🎨 全公司交易風格")
             if style_pie:
                 st.plotly_chart(style_pie, use_container_width=True)
         
         st.markdown("---")
-        col_pf, col_rr = st.columns(2)
-        with col_pf:
-            pf_fig, profitable_ratio = create_profit_factor_chart_colored(aid_stats_df)
-            st.plotly_chart(pf_fig, use_container_width=True)
-            st.success(f"PF > 1.0 佔比: {profitable_ratio:.1f}%")
-        with col_rr:
-            st.plotly_chart(create_risk_return_scatter(aid_stats_df, initial_balance), use_container_width=True)
+        
+        # 小提琴圖 + 統計摘要
+        st.markdown("### 🎻 客戶盈虧分佈")
+        violin_fig, violin_stats = create_violin_plot_with_stats(display_df)
+        
+        # 統計摘要浮動說明欄
+        stat_col, chart_col = st.columns([1, 3])
+        with stat_col:
+            st.info(f"""
+**📊 統計摘要**
+━━━━━━━━━━━━
+**客戶總數:** {violin_stats['count']:,}
+**盈利客戶:** {violin_stats['profitable']:,} ({violin_stats['profitable']/violin_stats['count']*100:.1f}%)
+**虧損客戶:** {violin_stats['losing']:,}
+━━━━━━━━━━━━
+**平均值:** ${violin_stats['mean']:,.2f}
+**中位數:** ${violin_stats['median']:,.2f}
+**標準差:** ${violin_stats['std']:,.2f}
+━━━━━━━━━━━━
+**Q1 (25%):** ${violin_stats['q1']:,.2f}
+**Q3 (75%):** ${violin_stats['q3']:,.2f}
+**IQR:** ${violin_stats['iqr']:,.2f}
+━━━━━━━━━━━━
+**異常點:** {violin_stats['outliers']} 位
+            """)
+            st.markdown("""
+**📖 圖例說明**
+- 🔵 藍點 = 各 AID
+- ⬛ 黑線 = 中位數
+- 🔴 紅線 = 平均值
+- 📦 白框 = IQR 區間
+            """)
+        with chart_col:
+            st.plotly_chart(violin_fig, use_container_width=True)
         
         st.markdown("---")
+        
+        # 風險回報矩陣 (放大)
+        st.markdown("### 🎯 風險回報矩陣")
+        st.plotly_chart(create_risk_return_scatter(aid_stats_df, initial_balance), use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 每日盈虧
         st.plotly_chart(create_daily_pnl_chart(display_df), use_container_width=True)
         
-        # ========== Top 20 歷史盈利英雄榜 ==========
         st.markdown("---")
-        st.markdown("### 🏆 Top 20 歷史盈利英雄榜")
-        st.caption(f"篩選條件：全時期總盈虧 > 0 | 初始資金: ${initial_balance:,} | 💡 點擊 AID 可複製")
         
-        history_hero = calculate_hero_metrics(display_df, initial_balance, scalper_threshold_seconds, filter_positive=True)
+        # ========== Top 20 盈利英雄榜 ==========
+        st.markdown("### 🏆 Top 20 歷史盈利英雄榜")
+        st.caption("💡 **點擊表格中的 AID 可選取複製，貼到 Tab 2 搜尋框即可查看詳情**")
+        
+        min_pnl_h1, min_wr_h1, min_sharpe_h1, max_mdd_h1 = render_global_filters("hist_hero", 0, 0, -10, 100)
+        
+        history_hero = calculate_hero_metrics(display_df, initial_balance, scalper_threshold_seconds, 
+                                              filter_positive=True, min_pnl=min_pnl_h1, min_winrate=min_wr_h1, 
+                                              min_sharpe=min_sharpe_h1, max_mdd=max_mdd_h1)
         
         if not history_hero.empty:
-            display_history = format_hero_table_display(history_hero)
-            st.dataframe(display_history, use_container_width=True, hide_index=True, column_config=get_table_column_config())
+            st.dataframe(format_hero_table_display(history_hero), use_container_width=True, hide_index=True, column_config=get_table_column_config())
         else:
-            st.info("無符合條件的盈利客戶")
+            st.info("無符合條件的客戶")
         
-        # ========== Top 20 歷史 Scalper 英雄榜 ==========
         st.markdown("---")
+        
+        # ========== Top 20 Scalper 英雄榜 ==========
         st.markdown("### 🔥 Top 20 歷史 Scalper 英雄榜")
         
-        # 實時過濾條件
-        scalp_filter_col1, scalp_filter_col2 = st.columns(2)
-        with scalp_filter_col1:
-            min_scalp_pct_hist = st.slider("Scalp% 門檻", min_value=50, max_value=100, value=80, step=5, key="hist_scalp_pct", help="僅顯示 Scalp 交易筆數佔比 > X% 的客戶")
-        with scalp_filter_col2:
-            min_scalp_profit_pct_hist = st.slider("Scalp Profit% 門檻", min_value=0, max_value=100, value=50, step=10, key="hist_scalp_profit", help="僅顯示 Scalp 盈虧佔總盈虧比例 > Y% 的客戶")
+        min_scalp_pct_h, min_scalp_pl_h = render_scalper_filters("hist_scalp", 80, 0)
+        min_pnl_s1, min_wr_s1, min_sharpe_s1, max_mdd_s1 = render_global_filters("hist_scalp_g", 0, 0, -10, 100)
         
-        st.caption(f"篩選條件：Scalp% > {min_scalp_pct_hist}% 且 Scalp Profit% > {min_scalp_profit_pct_hist}% 且總盈虧 > 0 | 💡 點擊 AID 可複製")
+        history_scalp = calculate_hero_metrics(display_df, initial_balance, scalper_threshold_seconds,
+                                               filter_positive=True, min_scalp_pct=min_scalp_pct_h, min_scalp_pl=min_scalp_pl_h,
+                                               min_pnl=min_pnl_s1, min_winrate=min_wr_s1, min_sharpe=min_sharpe_s1, max_mdd=max_mdd_s1)
         
-        history_scalp_hero = calculate_hero_metrics(display_df, initial_balance, scalper_threshold_seconds, filter_positive=True, min_scalp_pct=min_scalp_pct_hist, min_scalp_profit_pct=min_scalp_profit_pct_hist)
-        
-        if not history_scalp_hero.empty:
-            display_scalp = format_hero_table_display(history_scalp_hero)
-            st.dataframe(display_scalp, use_container_width=True, hide_index=True, column_config=get_table_column_config())
+        if not history_scalp.empty:
+            st.dataframe(format_hero_table_display(history_scalp), use_container_width=True, hide_index=True, column_config=get_table_column_config())
         else:
             st.info("無符合條件的 Scalper")
     
@@ -854,51 +938,66 @@ def main():
     with tab2:
         st.header("👤 個人報告卡")
         
-        st.caption("💡 提示：在表格點擊 AID 即可複製，在此處按 Ctrl+V 貼上即可快速切換客戶。")
+        st.caption("📋 **點擊上方表格 AID 複製，在此處貼上即可分析該客戶**")
         
+        # AID 輸入框 - 支持文字輸入與貼上
         all_aids = sorted(aid_stats_df['AID'].unique().tolist())
-        selected_aid = st.selectbox("🔍 貼上或輸入 AID...", options=all_aids, index=None, placeholder="🔍 貼上或輸入 AID...")
+        
+        aid_input = st.text_input("🔍 輸入或貼上 AID", value="", placeholder="輸入 AID 數字...", help="直接輸入數字或從表格複製貼上")
+        
+        # 自動匹配 AID
+        selected_aid = None
+        if aid_input:
+            # 清理輸入（移除空格、逗號等）
+            clean_input = aid_input.strip().replace(',', '').replace(' ', '')
+            if clean_input in all_aids:
+                selected_aid = clean_input
+            else:
+                # 嘗試模糊匹配
+                matches = [a for a in all_aids if clean_input in a]
+                if matches:
+                    selected_aid = matches[0]
+                    st.info(f"自動匹配到: {selected_aid}")
+                else:
+                    st.warning(f"找不到 AID: {clean_input}")
         
         if selected_aid:
             client_data = get_client_details(display_df, selected_aid, initial_balance, scalper_threshold_seconds)
             
             if client_data:
                 behavioral = client_data['behavioral']
-                
-                # 獲取排名
                 rank_overall, total_overall = get_client_ranking(aid_stats_df, selected_aid, 'Net_PL')
                 
-                # 大標題顯示 AID 與排名
                 st.markdown("---")
                 st.markdown(f"## 🆔 AID: {selected_aid}")
                 if rank_overall:
-                    st.markdown(f"**整體排名: 第 {rank_overall} 名 / {total_overall} 人**")
+                    st.markdown(f"**🏆 整體排名: 第 {rank_overall} 名 / {total_overall} 人**")
                 
                 # 核心指標
                 st.markdown("### 🎯 核心指標")
-                core_cols = st.columns(6)
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
                 pl_icon = "🟢" if client_data['net_pl'] >= 0 else "🔴"
-                core_cols[0].metric(f"{pl_icon} 總盈虧", f"${client_data['net_pl']:,.2f}")
-                core_cols[1].metric("🎯 勝率", f"{client_data['win_rate']:.2f}%")
-                core_cols[2].metric("📊 PF", f"{client_data['profit_factor']:.2f}")
+                c1.metric(f"{pl_icon} 總盈虧", f"${client_data['net_pl']:,.2f}")
+                c2.metric("🎯 勝率", f"{client_data['win_rate']:.1f}%")
+                c3.metric("📊 PF", f"{client_data['profit_factor']:.2f}")
+                c4.metric("📈 Sharpe", f"{client_data['sharpe']:.2f}")
                 mdd_icon = "🔴" if client_data['mdd_pct'] > 20 else ""
-                core_cols[3].metric(f"{mdd_icon} MDD%", f"{client_data['mdd_pct']:.1f}%")
-                core_cols[4].metric("📈 Median", f"${behavioral['median']:,.2f}")
-                core_cols[5].metric("📦 IQR", f"${behavioral['iqr']:,.2f}")
+                c5.metric(f"{mdd_icon}MDD%", f"{client_data['mdd_pct']:.1f}%")
+                c6.metric("📝 筆數", f"{client_data['trade_count']}")
                 
                 # Box Plot 指標
-                st.markdown("### 📦 盈虧分佈 (Box Plot)")
-                box_cols = st.columns(4)
-                box_cols[0].metric("Q1 (25th)", f"${behavioral['q1']:,.2f}")
-                box_cols[1].metric("Median", f"${behavioral['median']:,.2f}")
-                box_cols[2].metric("Q3 (75th)", f"${behavioral['q3']:,.2f}")
-                box_cols[3].metric("IQR", f"${behavioral['iqr']:,.2f}")
+                st.markdown("### 📦 盈虧分佈統計")
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("Q1 (25%)", f"${behavioral['q1']:,.2f}")
+                b2.metric("Median", f"${behavioral['median']:,.2f}")
+                b3.metric("Q3 (75%)", f"${behavioral['q3']:,.2f}")
+                b4.metric("IQR", f"${behavioral['iqr']:,.2f}")
                 
                 st.markdown("---")
-                st.markdown("### ⚔️ 行為特徵")
-                b1, b2 = st.columns(2)
+                st.markdown("### ⚔️ 行為分析")
+                ba1, ba2 = st.columns(2)
                 
-                with b1:
+                with ba1:
                     st.markdown("#### 多空拆解")
                     st.dataframe(pd.DataFrame({
                         '方向': ['🟢 BUY', '🔴 SELL'],
@@ -907,31 +1006,29 @@ def main():
                         '勝率': [f"{behavioral['buy_winrate']:.1f}%", f"{behavioral['sell_winrate']:.1f}%"]
                     }), use_container_width=True, hide_index=True)
                 
-                with b2:
+                with ba2:
                     st.markdown("#### 剝頭皮診斷")
                     st.dataframe(pd.DataFrame({
-                        '指標': ['Scalp%', 'Scalp 盈虧貢獻', 'Scalp 勝率'],
+                        '指標': ['Scalp%', '盈虧貢獻', 'Scalp勝率'],
                         '數值': [f"{behavioral['scalp_ratio']:.1f}%", f"{behavioral['scalp_contribution']:.1f}%", f"{behavioral['scalp_winrate']:.1f}%"]
                     }), use_container_width=True, hide_index=True)
                 
                 st.markdown("---")
                 st.markdown("### 📈 連續紀錄 & 時間效率")
                 s1, s2 = st.columns(2)
-                
                 with s1:
                     st.dataframe(pd.DataFrame({
                         '類型': ['🏆 連續獲利', '💔 連續虧損'],
                         '次數': [f"{behavioral['max_win_streak']} 次", f"{behavioral['max_loss_streak']} 次"],
                         '金額': [f"${behavioral['max_streak_profit']:,.2f}", f"${behavioral['max_streak_loss']:,.2f}"]
                     }), use_container_width=True, hide_index=True)
-                
                 with s2:
                     st.dataframe(pd.DataFrame({
-                        '指標': ['平均持倉', '持倉天數', '分鐘獲利'],
-                        '數值': [behavioral['avg_hold_formatted'], f"{behavioral['avg_hold_days']:.2f} 天", f"${behavioral['profit_per_minute']:.4f}"]
+                        '指標': ['平均持倉', '天數', '分鐘獲利'],
+                        '數值': [behavioral['avg_hold_formatted'], f"{behavioral['avg_hold_days']:.2f}", f"${behavioral['profit_per_minute']:.4f}"]
                     }), use_container_width=True, hide_index=True)
                 
-                # 自動標籤
+                # 標籤
                 st.markdown("---")
                 tags = []
                 if behavioral['scalp_ratio'] > 50:
@@ -944,6 +1041,8 @@ def main():
                     tags.append("🎯 高準度")
                 if client_data['profit_factor'] > 2:
                     tags.append("💰 高效益")
+                if client_data['sharpe'] > 2:
+                    tags.append("⭐ 高Sharpe")
                 if client_data['mdd_pct'] < 10:
                     tags.append("🛡️ 低風險")
                 st.markdown("**自動標籤:** " + (" ".join([f"`{t}`" for t in tags]) if tags else "`📊 一般型`"))
@@ -953,13 +1052,13 @@ def main():
                 with ch1:
                     st.plotly_chart(create_client_cumulative_chart(client_data['cumulative_df'], scalper_minutes), use_container_width=True)
                 with ch2:
-                    personal_style = create_trading_style_pie(client_data['client_df'], f"{selected_aid} 風格分佈")
+                    personal_style = create_trading_style_pie(client_data['client_df'], f"{selected_aid} 風格")
                     if personal_style:
                         st.plotly_chart(personal_style, use_container_width=True)
             else:
-                st.warning(f"找不到 AID: {selected_aid}")
+                st.warning(f"找不到 AID: {selected_aid} 的數據")
         else:
-            st.info("請選擇或貼上一個 AID 查看報告卡")
+            st.info("請輸入或貼上一個 AID 查看報告卡")
     
     # ==================== Tab 3 ====================
     with tab3:
@@ -975,34 +1074,32 @@ def main():
         if day_df.empty:
             st.warning("當日無交易數據")
         else:
-            # 當日 KPI
             day_pl = day_df['Net_PL'].sum()
             day_count = len(day_df)
             day_accounts = day_df[aid_col].nunique()
             day_wins = (day_df['Net_PL'] > 0).sum()
             day_wr = (day_wins / day_count * 100) if day_count > 0 else 0
             
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("當日總盈虧", f"${day_pl:,.2f}", delta="盈利" if day_pl >= 0 else "虧損")
-            kpi2.metric("當日交易筆數", f"{day_count:,}")
-            kpi3.metric("當日活躍帳號", f"{day_accounts:,}")
-            kpi4.metric("當日勝率", f"{day_wr:.1f}%")
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("當日總盈虧", f"${day_pl:,.2f}", delta="盈利" if day_pl >= 0 else "虧損")
+            k2.metric("當日交易筆數", f"{day_count:,}")
+            k3.metric("當日活躍帳號", f"{day_accounts:,}")
+            k4.metric("當日勝率", f"{day_wr:.1f}%")
             
             st.markdown("---")
             
-            # 產品堆疊柱狀圖
-            st.markdown("### 📊 當日產品分析 (Scalp vs Non-Scalp)")
+            # 產品分析
+            st.markdown("### 📊 當日產品分析")
             profit_products, loss_products = calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds)
-            
-            prod_col1, prod_col2 = st.columns(2)
-            with prod_col1:
-                profit_chart = create_stacked_product_chart(profit_products, is_profit=True)
+            p1, p2 = st.columns(2)
+            with p1:
+                profit_chart = create_stacked_product_chart(profit_products, True)
                 if profit_chart:
                     st.plotly_chart(profit_chart, use_container_width=True)
                 else:
                     st.info("無盈利產品")
-            with prod_col2:
-                loss_chart = create_stacked_product_chart(loss_products, is_profit=False)
+            with p2:
+                loss_chart = create_stacked_product_chart(loss_products, False)
                 if loss_chart:
                     st.plotly_chart(loss_chart, use_container_width=True)
                 else:
@@ -1010,43 +1107,39 @@ def main():
             
             st.markdown("---")
             
-            # ========== Top 20 當日盈利英雄榜 ==========
+            # ========== 當日盈利英雄榜 ==========
             st.markdown("### 🏆 Top 20 當日盈利英雄榜")
-            st.caption(f"篩選條件：當日 Net_PL > 0 | 初始資金: ${initial_balance:,} | 💡 點擊 AID 可複製")
+            st.caption("💡 **點擊 AID 複製後貼到 Tab 2 搜尋框**")
             
-            daily_hero = calculate_hero_metrics(day_df, initial_balance, scalper_threshold_seconds, filter_positive=True)
+            min_pnl_d1, min_wr_d1, min_sharpe_d1, max_mdd_d1 = render_global_filters("daily_hero", 0, 0, -10, 100)
+            
+            daily_hero = calculate_hero_metrics(day_df, initial_balance, scalper_threshold_seconds,
+                                                filter_positive=True, min_pnl=min_pnl_d1, min_winrate=min_wr_d1,
+                                                min_sharpe=min_sharpe_d1, max_mdd=max_mdd_d1)
             
             if not daily_hero.empty:
-                display_daily = format_hero_table_display(daily_hero)
-                st.dataframe(display_daily, use_container_width=True, hide_index=True, column_config=get_table_column_config())
-                
+                st.dataframe(format_hero_table_display(daily_hero), use_container_width=True, hide_index=True, column_config=get_table_column_config())
                 csv_data = daily_hero.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 下載盈利英雄榜 CSV", data=csv_data, file_name=f"daily_hero_{latest_date}.csv", mime="text/csv")
+                st.download_button("📥 下載盈利榜 CSV", data=csv_data, file_name=f"daily_hero_{latest_date}.csv", mime="text/csv")
             else:
                 st.info("當日無盈利客戶")
             
             st.markdown("---")
             
-            # ========== Top 20 當日 Scalper 英雄榜 ==========
+            # ========== 當日 Scalper 英雄榜 ==========
             st.markdown("### 🔥 Top 20 當日 Scalper 英雄榜")
             
-            # 實時過濾條件
-            daily_scalp_col1, daily_scalp_col2 = st.columns(2)
-            with daily_scalp_col1:
-                min_scalp_pct_daily = st.slider("Scalp% 門檻", min_value=50, max_value=100, value=80, step=5, key="daily_scalp_pct", help="僅顯示 Scalp 交易筆數佔比 > X% 的客戶")
-            with daily_scalp_col2:
-                min_scalp_profit_pct_daily = st.slider("Scalp Profit% 門檻", min_value=0, max_value=100, value=50, step=10, key="daily_scalp_profit", help="僅顯示 Scalp 盈虧佔總盈虧比例 > Y% 的客戶")
+            min_scalp_pct_d, min_scalp_pl_d = render_scalper_filters("daily_scalp", 80, 0)
+            min_pnl_ds, min_wr_ds, min_sharpe_ds, max_mdd_ds = render_global_filters("daily_scalp_g", 0, 0, -10, 100)
             
-            st.caption(f"篩選條件：Scalp% > {min_scalp_pct_daily}% 且 Scalp Profit% > {min_scalp_profit_pct_daily}% 且盈虧 > 0 | 💡 點擊 AID 可複製")
+            daily_scalp = calculate_hero_metrics(day_df, initial_balance, scalper_threshold_seconds,
+                                                 filter_positive=True, min_scalp_pct=min_scalp_pct_d, min_scalp_pl=min_scalp_pl_d,
+                                                 min_pnl=min_pnl_ds, min_winrate=min_wr_ds, min_sharpe=min_sharpe_ds, max_mdd=max_mdd_ds)
             
-            daily_scalp_hero = calculate_hero_metrics(day_df, initial_balance, scalper_threshold_seconds, filter_positive=True, min_scalp_pct=min_scalp_pct_daily, min_scalp_profit_pct=min_scalp_profit_pct_daily)
-            
-            if not daily_scalp_hero.empty:
-                display_scalp = format_hero_table_display(daily_scalp_hero)
-                st.dataframe(display_scalp, use_container_width=True, hide_index=True, column_config=get_table_column_config())
-                
-                csv_scalp = daily_scalp_hero.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 下載 Scalper 英雄榜 CSV", data=csv_scalp, file_name=f"scalper_hero_{latest_date}.csv", mime="text/csv")
+            if not daily_scalp.empty:
+                st.dataframe(format_hero_table_display(daily_scalp), use_container_width=True, hide_index=True, column_config=get_table_column_config())
+                csv_scalp = daily_scalp.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 下載 Scalper 榜 CSV", data=csv_scalp, file_name=f"scalper_{latest_date}.csv", mime="text/csv")
             else:
                 st.info("當日無符合條件的 Scalper")
 
