@@ -582,8 +582,8 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
             ]
         }).reset_index()  # ✅ 修復
         
-        product_stats.columns = ['Product', 'Total_PL', 'Scalper_Count', 'Scalper_PL']
-        product_stats['Non_Scalper_PL'] = product_stats['Total_PL'] - product_stats['Scalper_PL']
+        product_stats.columns = ['Product', 'Total_PL', 'Scalper_Count', 'Scalp_PL']
+        product_stats['NonScalp_PL'] = product_stats['Total_PL'] - product_stats['Scalp_PL']
         
         # 分離盈利和虧損
         profit_products = product_stats[product_stats['Total_PL'] > 0].copy()

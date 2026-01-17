@@ -282,7 +282,7 @@ def create_violin_plot_with_stats(_df):
         jitter=0.3,
         marker=dict(color='#3498DB', size=6, opacity=0.6),
         customdata=aid_pl['AID'].values,
-        hovertemplate='<b>AID:</b> %{customdata}<br><b>Net_PL:</b> $%{x:,.2f}<extra></extra>'
+        hovertemplate='%{x:,.0f}<extra></extra>'  # 極簡化提示
     ))
 
     x_padding = (Q99_pct - Q1_pct) * 0.1
@@ -392,13 +392,7 @@ def create_risk_return_scatter(_aid_stats_df, initial_balance):
             scatter_df['Win_Rate'],
             scatter_df['Sharpe']
         )),
-        hovertemplate=(
-            '<b>AID:</b> %{customdata[0]}<br>'
-            '<b>淨盈虧:</b> $%{y:,.2f}<br>'
-            '<b>MDD:</b> %{x:.1f}%<br>'
-            '<b>勝率:</b> %{customdata[1]:.1f}%<br>'
-            '<b>Sharpe:</b> %{customdata[2]:.2f}<extra></extra>'
-        )
+        hovertemplate='%{y:,.0f}<extra></extra>'  # 極簡化提示，只顯示盈虧金額
     ))
     fig.update_layout(
         title=f'🎯 風險回報矩陣 (初始資金: ${initial_balance:,})',
@@ -435,13 +429,20 @@ def create_daily_pnl_chart(_df):
     colors = ['#27AE60' if x > 0 else '#E74C3C' for x in daily_pnl['每日盈虧']]
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=daily_pnl['日期'], y=daily_pnl['每日盈虧'], marker_color=colors))
-    fig.add_hline(y=0, line_color="black", line_width=1)
+    fig.add_trace(go.Bar(
+        x=daily_pnl['日期'], 
+        y=daily_pnl['每日盈虧'], 
+        marker_color=colors,
+        hovertemplate='%{y:,.0f}<extra></extra>'  # 極簡化提示
+    ))
+    fig.add_hline(y=0, line_color="black", line_width=1.5)
     fig.update_layout(
         title='📅 每日盈虧',
         xaxis_title='日期',
         yaxis_title='淨盈虧 ($)',
         height=350,
+        hovermode='x unified',  # 統一懸浮模式
+        margin=dict(l=60, r=30, t=60, b=50),
         plot_bgcolor='rgba(248,249,250,1)'
     )
     return fig
@@ -492,11 +493,39 @@ def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def create_stacked_product_chart(_product_df, is_profit=True):
-    """創建堆疊產品柱狀圖 (Tab 3 用)"""
+    """創建堆疊產品柱狀圖 (Tab 3 用) - 優化版：防禦性邏輯 + 視野優化"""
     if _product_df is None or _product_df.empty:
         return None
 
     df = _product_df.copy()
+    
+    # 🛡️ 防禦性邏輯：自動偵測欄位名稱
+    # 可能的欄位名稱組合
+    nonscalp_candidates = ['NonScalp_PL', 'Non_Scalper_PL', 'Non-Scalp', 'NonScalper_PL']
+    scalp_candidates = ['Scalp_PL', 'Scalper_PL', 'Scalp', 'Scalper']
+    
+    # 找出實際存在的欄位
+    nonscalp_col = None
+    scalp_col = None
+    
+    for candidate in nonscalp_candidates:
+        if candidate in df.columns:
+            nonscalp_col = candidate
+            break
+    
+    for candidate in scalp_candidates:
+        if candidate in df.columns:
+            scalp_col = candidate
+            break
+    
+    # 如果找不到欄位，嘗試從 Total_PL 推算
+    if nonscalp_col is None or scalp_col is None:
+        st.error(f"❌ 產品數據欄位缺失。現有欄位: {list(df.columns)}")
+        return None
+    
+    # 統一重命名為標準格式
+    df = df.rename(columns={nonscalp_col: 'NonScalp_PL', scalp_col: 'Scalp_PL'})
+    
     if is_profit:
         non_scalp_color, scalp_color = '#1E8449', '#82E0AA'
         title = '📈 當日盈利產品 Top 5'
@@ -525,15 +554,27 @@ def create_stacked_product_chart(_product_df, is_profit=True):
         text=df['Scalp_PL'].apply(lambda x: f"${x:,.0f}"),
         textposition='inside'
     ))
+    
+    # 極簡化懸浮提示
+    fig.update_traces(hovertemplate="%{x:,.0f}<extra></extra>")
+    
     fig.update_layout(
         title=title,
         barmode='relative',
         xaxis_title='盈虧金額 ($)',
         height=300,
-        legend=dict(orientation="h", y=1.1),
+        hovermode='y unified',  # 統一懸浮模式（橫向條形圖用 y）
+        legend=dict(
+            orientation="h",     # 水平排列
+            y=1.15,              # 提高位置至圖表區域外
+            x=0,
+            xanchor='left',
+            yanchor='bottom'
+        ),
+        margin=dict(l=100, r=30, t=85, b=50),  # 增加頂部邊距
         plot_bgcolor='rgba(248,249,250,1)'
     )
-    fig.add_vline(x=0, line_color="black", line_width=1)
+    fig.add_vline(x=0, line_color="black", line_width=1.5)
 
     return fig
 
@@ -556,7 +597,7 @@ COLOR_MAP = {
 @st.cache_data(show_spinner=False, ttl=1800)
 def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
     """
-    創建個人 Top N 產品水平條形圖 (Tab 2 用)
+    創建個人 Top N 產品水平條形圖 (Tab 2 用) - 優化版：視野優化
     
     參數:
         _product_df: 產品盈虧 DataFrame，包含 ['Symbol', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']
@@ -567,6 +608,35 @@ def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
         return None
     
     df = _product_df.copy()
+    
+    # 🛡️ 防禦性邏輯：檢查欄位
+    required_cols = ['Symbol', 'Total_PL']
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"❌ 產品數據欄位缺失。現有欄位: {list(df.columns)}")
+        return None
+    
+    # 自動偵測 Scalp/NonScalp 欄位名稱
+    scalp_col = None
+    nonscalp_col = None
+    
+    for candidate in ['Scalp_PL', 'Scalper_PL']:
+        if candidate in df.columns:
+            scalp_col = candidate
+            break
+    
+    for candidate in ['NonScalp_PL', 'Non_Scalper_PL', 'NonScalper_PL']:
+        if candidate in df.columns:
+            nonscalp_col = candidate
+            break
+    
+    if scalp_col is None or nonscalp_col is None:
+        st.warning(f"⚠️ 無法找到 Scalp/NonScalp 欄位，將使用 Total_PL")
+        # 如果欄位缺失，創建預設值
+        df['Scalp_PL'] = 0
+        df['NonScalp_PL'] = df['Total_PL']
+    else:
+        # 重命名為統一格式
+        df = df.rename(columns={scalp_col: 'Scalp_PL', nonscalp_col: 'NonScalp_PL'})
     
     # 選擇顏色方案
     if is_profit:
@@ -593,8 +663,7 @@ def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
         orientation='h',
         marker_color=colors['NonScalp'],
         text=df['NonScalp_PL'].apply(lambda x: f"${x:,.0f}" if abs(x) >= 1 else ""),
-        textposition='inside',
-        hovertemplate='<b>產品:</b> %{y}<br><b>Non-Scalp:</b> $%{x:,.2f}<extra></extra>'
+        textposition='inside'
     ))
     
     # 添加 Scalp 條形
@@ -605,9 +674,11 @@ def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
         orientation='h',
         marker_color=colors['Scalp'],
         text=df['Scalp_PL'].apply(lambda x: f"${x:,.0f}" if abs(x) >= 1 else ""),
-        textposition='inside',
-        hovertemplate='<b>產品:</b> %{y}<br><b>Scalp:</b> $%{x:,.2f}<extra></extra>'
+        textposition='inside'
     ))
+    
+    # 極簡化懸浮提示
+    fig.update_traces(hovertemplate="%{x:,.0f}<extra></extra>")
     
     fig.update_layout(
         title=title,
@@ -615,9 +686,15 @@ def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
         xaxis_title='盈虧金額 ($)',
         yaxis_title='產品',
         height=300,
-        hovermode='y unified',
-        legend=dict(orientation="h", y=1.15, x=0),
-        margin=dict(l=100, r=30, t=80, b=50),
+        hovermode='y unified',  # 統一懸浮模式（橫向條形圖用 y）
+        legend=dict(
+            orientation="h",     # 水平排列
+            y=1.18,              # 提高位置至圖表區域外
+            x=0,
+            xanchor='left',
+            yanchor='bottom'
+        ),
+        margin=dict(l=100, r=30, t=90, b=50),  # 增加頂部邊距
         plot_bgcolor='rgba(248,249,250,1)'
     )
     
