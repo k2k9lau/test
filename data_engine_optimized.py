@@ -23,91 +23,177 @@ COLUMN_MAP = {
 # ==================== 數據載入與預處理 (優化版) ====================
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_and_preprocess(uploaded_files):
-    """載入並預處理交易數據 - 優化記憶體使用"""
+    """
+    載入並預處理交易數據 - 優化記憶體使用
+    增強錯誤處理和多檔案穩定性
+    """
+    if not uploaded_files:
+        return None
+    
     dfs = []
+    error_files = []
+    
     for uploaded_file in uploaded_files:
         try:
+            # 重置檔案指針
+            uploaded_file.seek(0)
+            
             if uploaded_file.name.endswith('.csv'):
                 # 使用更高效的 CSV 讀取參數
-                df = pd.read_csv(uploaded_file, parse_dates=False)
+                df = pd.read_csv(
+                    uploaded_file, 
+                    parse_dates=False,
+                    low_memory=False
+                )
+            elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+                df = pd.read_excel(uploaded_file, engine='openpyxl')
             else:
-                df = pd.read_excel(uploaded_file)
+                st.warning(f"⚠️ 跳過不支援的檔案格式: {uploaded_file.name}")
+                continue
+            
+            # 驗證必要欄位
+            required_cols = [COLUMN_MAP['aid'], COLUMN_MAP['execution_time']]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                error_files.append(f"{uploaded_file.name} (缺少欄位: {', '.join(missing_cols)})")
+                continue
+            
             dfs.append(df)
+            
         except Exception as e:
-            st.error(f"讀取檔案 {uploaded_file.name} 時發生錯誤: {e}")
+            error_files.append(f"{uploaded_file.name} ({str(e)})")
             continue
-
+    
+    # 顯示錯誤訊息
+    if error_files:
+        st.error(f"❌ 以下檔案載入失敗:\n" + "\n".join([f"- {f}" for f in error_files]))
+    
     if not dfs:
+        st.error("❌ 無法載入任何有效檔案")
         return None
-
-    df = pd.concat(dfs, ignore_index=True)
+    
+    # 合併數據框
+    try:
+        df = pd.concat(dfs, ignore_index=True)
+    except Exception as e:
+        st.error(f"❌ 合併檔案時發生錯誤: {e}")
+        return None
+    
+    # 數據清理
     exec_col = COLUMN_MAP['execution_time']
+    aid_col = COLUMN_MAP['aid']
     
-    # 清理數據
-    if exec_col in df.columns:
-        df = df[df[exec_col] != 'Total'].copy()
-    df = df.drop_duplicates()
-
-    # 日期轉換 - 向量化處理
-    for col in ['execution_time', 'open_time']:
-        if COLUMN_MAP[col] in df.columns:
-            df[COLUMN_MAP[col]] = pd.to_datetime(df[COLUMN_MAP[col]], errors='coerce')
-
-    # 數值欄位處理 - 一次性填充
-    numeric_cols = ['closed_pl', 'commission', 'swap']
-    for col in numeric_cols:
-        if COLUMN_MAP[col] in df.columns:
-            df[COLUMN_MAP[col]] = pd.to_numeric(df[COLUMN_MAP[col]], errors='coerce').fillna(0)
-
-    # 向量化計算 Net_PL
-    df['Net_PL'] = df[COLUMN_MAP['closed_pl']] + df[COLUMN_MAP['commission']] + df[COLUMN_MAP['swap']]
-
-    # 向量化計算持倉時間
-    exec_time = df[COLUMN_MAP['execution_time']]
-    open_time = df[COLUMN_MAP['open_time']]
-    df['Hold_Seconds'] = np.where(
-        pd.notna(exec_time) & pd.notna(open_time),
-        (exec_time - open_time).dt.total_seconds(),
-        np.nan
-    )
-    df['Hold_Minutes'] = df['Hold_Seconds'] / 60
-
-    # AID 清洗
-    if COLUMN_MAP['aid'] in df.columns:
-        df[COLUMN_MAP['aid']] = (
-            df[COLUMN_MAP['aid']]
-            .astype(str)
-            .str.replace(r'\.0$', '', regex=True)
-            .str.replace(',', '', regex=False)
-            .str.strip()
+    try:
+        # 移除 Total 行
+        if exec_col in df.columns:
+            df = df[df[exec_col] != 'Total'].copy()
+        
+        # 去重
+        original_count = len(df)
+        df = df.drop_duplicates()
+        if len(df) < original_count:
+            st.info(f"ℹ️ 已移除 {original_count - len(df)} 筆重複數據")
+        
+        # 日期轉換 - 向量化處理
+        for col_key in ['execution_time', 'open_time']:
+            col_name = COLUMN_MAP[col_key]
+            if col_name in df.columns:
+                df[col_name] = pd.to_datetime(df[col_name], errors='coerce')
+                
+                # 檢查無效日期
+                invalid_dates = df[col_name].isna().sum()
+                if invalid_dates > 0:
+                    st.warning(f"⚠️ {col_name}: {invalid_dates} 筆日期無效")
+        
+        # 數值欄位處理 - 一次性填充
+        numeric_cols = ['closed_pl', 'commission', 'swap']
+        for col_key in numeric_cols:
+            col_name = COLUMN_MAP[col_key]
+            if col_name in df.columns:
+                df[col_name] = pd.to_numeric(df[col_name], errors='coerce').fillna(0)
+        
+        # 向量化計算 Net_PL
+        df['Net_PL'] = (
+            df[COLUMN_MAP['closed_pl']] + 
+            df[COLUMN_MAP['commission']] + 
+            df[COLUMN_MAP['swap']]
         )
-        # 優化: 轉換為 category 節省記憶體
-        df[COLUMN_MAP['aid']] = df[COLUMN_MAP['aid']].astype('category')
-
-    # 記憶體優化: 轉換其他分類欄位
-    categorical_cols = ['action', 'instrument', 'side', 'business_type']
-    for col_key in categorical_cols:
-        if COLUMN_MAP[col_key] in df.columns:
-            df[COLUMN_MAP[col_key]] = df[COLUMN_MAP[col_key]].astype('category')
-
-    # 記憶體優化: 降低數值欄位精度 (float64 -> float32)
-    float_cols = ['Net_PL', 'Hold_Seconds', 'Hold_Minutes'] + [COLUMN_MAP[c] for c in numeric_cols if COLUMN_MAP[c] in df.columns]
-    for col in float_cols:
-        if col in df.columns:
-            df[col] = df[col].astype('float32')
-    
-    if COLUMN_MAP['volume'] in df.columns:
-        df[COLUMN_MAP['volume']] = pd.to_numeric(df[COLUMN_MAP['volume']], errors='coerce').fillna(0).astype('float32')
-
-    return df
+        
+        # 向量化計算持倉時間
+        exec_time = df[COLUMN_MAP['execution_time']]
+        open_time = df[COLUMN_MAP['open_time']]
+        
+        df['Hold_Seconds'] = np.where(
+            pd.notna(exec_time) & pd.notna(open_time),
+            (exec_time - open_time).dt.total_seconds(),
+            np.nan
+        )
+        df['Hold_Minutes'] = df['Hold_Seconds'] / 60
+        
+        # AID 清洗 - 確保不會變成 NaN
+        if aid_col in df.columns:
+            df[aid_col] = (
+                df[aid_col]
+                .astype(str)
+                .str.replace(r'\.0$', '', regex=True)
+                .str.replace(',', '', regex=False)
+                .str.strip()
+                .replace('nan', '')  # 移除字串 'nan'
+            )
+            
+            # 移除空值 AID
+            before_filter = len(df)
+            df = df[df[aid_col] != ''].copy()
+            if len(df) < before_filter:
+                st.warning(f"⚠️ 已移除 {before_filter - len(df)} 筆無效 AID")
+            
+            # 優化: 轉換為 category 節省記憶體
+            df[aid_col] = df[aid_col].astype('category')
+        
+        # 記憶體優化: 轉換其他分類欄位
+        categorical_cols = ['action', 'instrument', 'side', 'business_type']
+        for col_key in categorical_cols:
+            col_name = COLUMN_MAP[col_key]
+            if col_name in df.columns:
+                df[col_name] = df[col_name].astype('category')
+        
+        # 記憶體優化: 降低數值欄位精度 (float64 -> float32)
+        float_cols = ['Net_PL', 'Hold_Seconds', 'Hold_Minutes']
+        for col_key in numeric_cols:
+            if COLUMN_MAP[col_key] in df.columns:
+                float_cols.append(COLUMN_MAP[col_key])
+        
+        for col in float_cols:
+            if col in df.columns:
+                df[col] = df[col].astype('float32')
+        
+        if COLUMN_MAP['volume'] in df.columns:
+            df[COLUMN_MAP['volume']] = pd.to_numeric(
+                df[COLUMN_MAP['volume']], 
+                errors='coerce'
+            ).fillna(0).astype('float32')
+        
+        st.success(f"✅ 成功載入 {len(dfs)} 個檔案，共 {len(df):,} 筆數據")
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ 數據處理時發生錯誤: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
 
 
 def filter_closing_trades(df):
     """過濾平倉交易"""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    
     action_col = COLUMN_MAP['action']
     if action_col in df.columns:
         return df[df[action_col] == 'CLOSING'].copy()
-    return df
+    return df.copy()
 
 
 def classify_trading_style(hold_minutes):
@@ -130,19 +216,22 @@ def calculate_mdd_vectorized(group_df, initial_balance, exec_col):
     if len(group_df) < 2:
         return 0.0
     
-    # 按時間排序並計算累積盈虧
-    sorted_df = group_df.sort_values(exec_col)
-    cumulative_pl = sorted_df['Net_PL'].cumsum()
-    equity = initial_balance + cumulative_pl
-    
-    # 使用 cummax 計算運行最大值 (極高效)
-    running_max = equity.cummax()
-    
-    # 向量化計算回撤百分比
-    drawdown = np.where(running_max != 0, (equity - running_max) / running_max * 100, 0)
-    mdd_pct = abs(np.min(drawdown))
-    
-    return mdd_pct
+    try:
+        # 按時間排序並計算累積盈虧
+        sorted_df = group_df.sort_values(exec_col)
+        cumulative_pl = sorted_df['Net_PL'].cumsum()
+        equity = initial_balance + cumulative_pl
+        
+        # 使用 cummax 計算運行最大值 (極高效)
+        running_max = equity.cummax()
+        
+        # 向量化計算回撤百分比
+        drawdown = np.where(running_max != 0, (equity - running_max) / running_max * 100, 0)
+        mdd_pct = abs(np.min(drawdown))
+        
+        return float(mdd_pct)
+    except:
+        return 0.0
 
 
 def calculate_sharpe_vectorized(pnl_series, min_trades=3):
@@ -150,10 +239,16 @@ def calculate_sharpe_vectorized(pnl_series, min_trades=3):
     if len(pnl_series) < min_trades:
         return 0.0
     
-    mean_pl = pnl_series.mean()
-    std_pl = pnl_series.std()
-    
-    return mean_pl / std_pl if std_pl > 0 else 0.0
+    try:
+        mean_pl = pnl_series.mean()
+        std_pl = pnl_series.std()
+        
+        if pd.isna(std_pl) or std_pl == 0:
+            return 0.0
+        
+        return float(mean_pl / std_pl)
+    except:
+        return 0.0
 
 
 # ==================== 核心計算邏輯 (全向量化版本) ====================
@@ -162,550 +257,672 @@ def calculate_all_aid_stats_realtime(df, initial_balance, scalper_threshold_seco
     """
     計算所有 AID 的即時統計 - 完全向量化版本
     使用 groupby + agg 替代循環,大幅提升效能
+    **修復: 所有 groupby 後都加上 reset_index()**
     """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    
     aid_col = COLUMN_MAP['aid']
     volume_col = COLUMN_MAP['volume']
     exec_col = COLUMN_MAP['execution_time']
     instrument_col = COLUMN_MAP['instrument']
     closed_pl_col = COLUMN_MAP['closed_pl']
-
+    
     closing_df = filter_closing_trades(df)
     
     if closing_df.empty:
         return pd.DataFrame()
-
-    # 預先計算 Scalper mask (向量化)
-    closing_df = closing_df.copy()
-    closing_df['is_scalper'] = closing_df['Hold_Seconds'] < scalper_threshold_seconds
-    closing_df['is_win'] = closing_df['Net_PL'] > 0
-    closing_df['is_gain'] = closing_df[closed_pl_col] > 0
-    closing_df['abs_loss'] = np.where(closing_df[closed_pl_col] < 0, 
-                                       abs(closing_df[closed_pl_col]), 0)
-
-    # 基礎統計 - 一次性 groupby 聚合
-    basic_stats = closing_df.groupby(aid_col, observed=True).agg({
-        'Net_PL': ['sum', 'mean', 'std', 'count'],
-        volume_col: 'sum' if volume_col in closing_df.columns else 'count',
-        'Hold_Seconds': 'mean',
-        'is_win': 'sum',
-        'is_scalper': ['sum', lambda x: (x * closing_df.loc[x.index, 'Net_PL']).sum()],
-        closed_pl_col: [
-            lambda x: x[x > 0].sum(),  # gains
-            lambda x: abs(x[x < 0].sum())  # losses
+    
+    try:
+        # 預先計算 Scalper mask (向量化)
+        closing_df = closing_df.copy()
+        closing_df['is_scalper'] = closing_df['Hold_Seconds'] < scalper_threshold_seconds
+        closing_df['is_win'] = closing_df['Net_PL'] > 0
+        closing_df['is_gain'] = closing_df[closed_pl_col] > 0
+        closing_df['abs_loss'] = np.where(
+            closing_df[closed_pl_col] < 0, 
+            abs(closing_df[closed_pl_col]), 
+            0
+        )
+        
+        # 基礎統計 - 一次性 groupby 聚合
+        basic_stats = closing_df.groupby(aid_col, observed=True).agg({
+            'Net_PL': ['sum', 'mean', 'std', 'count'],
+            volume_col: 'sum' if volume_col in closing_df.columns else 'count',
+            'Hold_Seconds': 'mean',
+            'is_win': 'sum',
+            'is_scalper': [
+                'sum', 
+                lambda x: (x * closing_df.loc[x.index, 'Net_PL']).sum()
+            ],
+            closed_pl_col: [
+                lambda x: x[x > 0].sum(),  # gains
+                lambda x: abs(x[x < 0].sum())  # losses
+            ]
+        }).reset_index()  # ✅ 修復: 加上 reset_index()
+        
+        # 展平多級列名
+        basic_stats.columns = [
+            'AID', 'Net_PL', 'Mean_PL', 'Std_PL', 'Trade_Count', 
+            'Trade_Volume', 'Avg_Hold_Seconds', 'Wins',
+            'Scalper_Count', 'Scalper_PL', 'Gains', 'Losses'
         ]
-    }).reset_index()
-
-    # 展平多級列名
-    basic_stats.columns = [
-        'AID', 'Net_PL', 'Mean_PL', 'Std_PL', 'Trade_Count', 
-        'Trade_Volume', 'Avg_Hold_Seconds', 'Wins',
-        'Scalper_Count', 'Scalper_PL', 'Gains', 'Losses'
-    ]
-
-    # 計算百分位數 (Q1, Median, Q3) - 向量化
-    quantiles = closing_df.groupby(aid_col, observed=True)['Net_PL'].quantile([0.25, 0.5, 0.75]).unstack()
-    quantiles.columns = ['Q1', 'Median', 'Q3']
-    quantiles = quantiles.reset_index()
-    # 確保欄位名稱統一為 'AID'
-    quantiles.columns = ['AID', 'Q1', 'Median', 'Q3']
-
-    # 合併基礎統計與百分位數
-    stats = basic_stats.merge(quantiles, on='AID', how='left')
-
-    # 向量化計算衍生指標
-    stats['Win_Rate'] = np.where(stats['Trade_Count'] > 0, 
-                                  (stats['Wins'] / stats['Trade_Count'] * 100), 0)
-    
-    stats['Scalper_Ratio'] = np.where(stats['Trade_Count'] > 0,
-                                       (stats['Scalper_Count'] / stats['Trade_Count'] * 100), 0)
-    
-    stats['Profit_Factor'] = np.where(stats['Losses'] > 0,
-                                       stats['Gains'] / stats['Losses'],
-                                       np.where(stats['Gains'] > 0, 5.0, 0.0))
-    
-    stats['Sharpe'] = np.where((stats['Trade_Count'] >= 3) & (stats['Std_PL'] > 0),
-                                stats['Mean_PL'] / stats['Std_PL'], 0.0)
-
-    # MDD 計算 - 使用向量化函數
-    mdd_results = []
-    for aid in stats['AID']:
-        aid_data = closing_df[closing_df[aid_col] == aid]
-        mdd_pct = calculate_mdd_vectorized(aid_data, initial_balance, exec_col)
-        mdd_results.append(mdd_pct)
-    
-    stats['MDD_Pct'] = mdd_results
-
-    # Main Symbol - 使用向量化 mode
-    if instrument_col in closing_df.columns:
-        main_symbols = closing_df.groupby(aid_col, observed=True)[instrument_col].agg(
-            lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else 'N/A'
-        ).reset_index()
-        main_symbols.columns = ['AID', 'Main_Symbol']
-        stats = stats.merge(main_symbols, on='AID')
-    else:
-        stats['Main_Symbol'] = 'N/A'
-
-    # 填充缺失值並四捨五入
-    stats['Avg_Hold_Seconds'] = stats['Avg_Hold_Seconds'].fillna(0)
-    
-    # 格式化輸出欄位
-    numeric_cols = ['Net_PL', 'Trade_Volume', 'Win_Rate', 'Avg_Hold_Seconds', 
-                    'MDD_Pct', 'Profit_Factor', 'Scalper_Ratio', 'Scalper_PL', 
-                    'Sharpe', 'Q1', 'Median', 'Q3']
-    
-    for col in numeric_cols:
-        if col in stats.columns:
-            stats[col] = stats[col].round(2)
-    
-    # 轉換整數欄位
-    stats['Trade_Count'] = stats['Trade_Count'].astype(int)
-    stats['Scalper_Count'] = stats['Scalper_Count'].astype(int)
-
-    # 選擇最終輸出欄位
-    final_cols = [
-        'AID', 'Net_PL', 'Trade_Count', 'Trade_Volume', 'Win_Rate', 
-        'Avg_Hold_Seconds', 'MDD_Pct', 'Profit_Factor', 'Scalper_Count', 
-        'Scalper_Ratio', 'Scalper_PL', 'Sharpe', 'Q1', 'Median', 'Q3', 'Main_Symbol'
-    ]
-    
-    return stats[final_cols]
+        
+        # 計算百分位數 (Q1, Median, Q3) - 向量化
+        quantiles = (
+            closing_df.groupby(aid_col, observed=True)['Net_PL']
+            .quantile([0.25, 0.5, 0.75])
+            .unstack()
+            .reset_index()  # ✅ 修復: 加上 reset_index()
+        )
+        quantiles.columns = ['AID', 'Q1', 'Median', 'Q3']
+        
+        # 合併基礎統計與百分位數
+        stats = basic_stats.merge(quantiles, on='AID', how='left')
+        
+        # 向量化計算衍生指標
+        stats['Win_Rate'] = np.where(
+            stats['Trade_Count'] > 0, 
+            (stats['Wins'] / stats['Trade_Count'] * 100), 
+            0
+        )
+        
+        stats['Scalper_Ratio'] = np.where(
+            stats['Trade_Count'] > 0,
+            (stats['Scalper_Count'] / stats['Trade_Count'] * 100), 
+            0
+        )
+        
+        stats['Profit_Factor'] = np.where(
+            stats['Losses'] > 0,
+            stats['Gains'] / stats['Losses'],
+            np.where(stats['Gains'] > 0, 5.0, 0.0)
+        )
+        
+        stats['IQR'] = stats['Q3'] - stats['Q1']
+        
+        # Sharpe Ratio (批量計算)
+        sharpe_values = []
+        for aid in stats['AID']:
+            aid_data = closing_df[closing_df[aid_col] == aid]['Net_PL']
+            sharpe = calculate_sharpe_vectorized(aid_data)
+            sharpe_values.append(sharpe)
+        stats['Sharpe'] = sharpe_values
+        
+        # MDD% (批量計算)
+        mdd_values = []
+        for aid in stats['AID']:
+            aid_group = closing_df[closing_df[aid_col] == aid]
+            mdd = calculate_mdd_vectorized(aid_group, initial_balance, exec_col)
+            mdd_values.append(mdd)
+        stats['MDD_Pct'] = mdd_values
+        
+        # 確保所有數值欄位為 float
+        numeric_columns = [
+            'Net_PL', 'Mean_PL', 'Std_PL', 'Trade_Volume', 'Avg_Hold_Seconds',
+            'Scalper_PL', 'Gains', 'Losses', 'Win_Rate', 'Scalper_Ratio',
+            'Profit_Factor', 'Q1', 'Median', 'Q3', 'IQR', 'Sharpe', 'MDD_Pct'
+        ]
+        
+        for col in numeric_columns:
+            if col in stats.columns:
+                stats[col] = pd.to_numeric(stats[col], errors='coerce').fillna(0)
+        
+        # 確保整數欄位
+        stats['Trade_Count'] = stats['Trade_Count'].astype(int)
+        stats['Wins'] = stats['Wins'].astype(int)
+        stats['Scalper_Count'] = stats['Scalper_Count'].astype(int)
+        
+        return stats
+        
+    except Exception as e:
+        st.error(f"❌ 計算統計時發生錯誤: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False, ttl=1800)
-def calculate_hero_metrics(data_df, initial_balance, scalper_threshold_seconds,
-                          filter_positive=True, min_scalp_pct=None, min_scalp_pl=None,
-                          min_pnl=None, min_winrate=None, min_sharpe=None, max_mdd=None):
+def calculate_hero_metrics(
+    df, 
+    initial_balance, 
+    scalper_threshold_seconds,
+    filter_positive=True,
+    min_pnl=0.0,
+    min_winrate=0.0,
+    min_sharpe=-10.0,
+    max_mdd=100.0,
+    min_scalp_pct=0.0,
+    min_scalp_pl=0.0
+):
     """
-    統一計算英雄榜指標 - 向量化優化版本
+    計算英雄榜指標
+    **修復: 所有 groupby 後都加上 reset_index()**
     """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    
     aid_col = COLUMN_MAP['aid']
     exec_col = COLUMN_MAP['execution_time']
-
-    closing_df = filter_closing_trades(data_df)
+    closed_pl_col = COLUMN_MAP['closed_pl']
+    
+    closing_df = filter_closing_trades(df)
     
     if closing_df.empty:
         return pd.DataFrame()
-
-    # 預計算向量化欄位
-    closing_df = closing_df.copy()
-    closing_df['is_scalper'] = closing_df['Hold_Seconds'] < scalper_threshold_seconds
-    closing_df['is_win'] = closing_df['Net_PL'] > 0
-    closing_df['is_loss'] = closing_df['Net_PL'] < 0
-
-    # 一次性 groupby 聚合所有基礎指標
-    grouped = closing_df.groupby(aid_col, observed=True).agg({
-        'Net_PL': ['sum', 'mean', 'std', 'count'],
-        'is_win': 'sum',
-        'is_scalper': ['sum', lambda x: (x * closing_df.loc[x.index, 'Net_PL']).sum()]
-    })
     
-    # 展平欄位名
-    grouped.columns = ['_'.join(col).strip('_') for col in grouped.columns.values]
-    grouped = grouped.reset_index()
-    grouped.columns = ['AID', 'Net_PL', 'Mean_PL', 'Std_PL', 'Trade_Count', 
-                       'Wins', 'Scalp_Count', 'Scalp_PL']
-
-    # 應用初步過濾
-    if filter_positive:
-        grouped = grouped[grouped['Net_PL'] > 0]
-    
-    if grouped.empty:
+    try:
+        # 預計算 mask
+        closing_df = closing_df.copy()
+        closing_df['is_scalper'] = closing_df['Hold_Seconds'] < scalper_threshold_seconds
+        closing_df['is_win'] = closing_df['Net_PL'] > 0
+        
+        # 聚合統計 - ✅ 加上 reset_index()
+        hero_stats = closing_df.groupby(aid_col, observed=True).agg({
+            'Net_PL': ['sum', 'count'],
+            'is_win': 'sum',
+            'is_scalper': [
+                'sum',
+                lambda x: (x * closing_df.loc[x.index, 'Net_PL']).sum()
+            ],
+            closed_pl_col: [
+                lambda x: x[x > 0].sum(),
+                lambda x: abs(x[x < 0].sum())
+            ]
+        }).reset_index()  # ✅ 修復
+        
+        hero_stats.columns = [
+            'AID', 'Net_PL', 'Trade_Count', 'Wins', 
+            'Scalper_Count', 'Scalper_PL', 'Gains', 'Losses'
+        ]
+        
+        # 向量化計算
+        hero_stats['Win_Rate'] = np.where(
+            hero_stats['Trade_Count'] > 0,
+            (hero_stats['Wins'] / hero_stats['Trade_Count'] * 100),
+            0
+        )
+        
+        hero_stats['Scalper_Ratio'] = np.where(
+            hero_stats['Trade_Count'] > 0,
+            (hero_stats['Scalper_Count'] / hero_stats['Trade_Count'] * 100),
+            0
+        )
+        
+        hero_stats['Profit_Factor'] = np.where(
+            hero_stats['Losses'] > 0,
+            hero_stats['Gains'] / hero_stats['Losses'],
+            np.where(hero_stats['Gains'] > 0, 5.0, 0.0)
+        )
+        
+        # Sharpe 和 MDD
+        sharpe_list = []
+        mdd_list = []
+        
+        for aid in hero_stats['AID']:
+            aid_data = closing_df[closing_df[aid_col] == aid]
+            sharpe = calculate_sharpe_vectorized(aid_data['Net_PL'])
+            mdd = calculate_mdd_vectorized(aid_data, initial_balance, exec_col)
+            sharpe_list.append(sharpe)
+            mdd_list.append(mdd)
+        
+        hero_stats['Sharpe'] = sharpe_list
+        hero_stats['MDD_Pct'] = mdd_list
+        
+        # 篩選
+        mask = (hero_stats['Net_PL'] > 0) if filter_positive else (hero_stats['Net_PL'] != 0)
+        
+        mask &= (hero_stats['Net_PL'] >= min_pnl)
+        mask &= (hero_stats['Win_Rate'] >= min_winrate)
+        mask &= (hero_stats['Sharpe'] >= min_sharpe)
+        mask &= (hero_stats['MDD_Pct'] <= max_mdd)
+        mask &= (hero_stats['Scalper_Ratio'] >= min_scalp_pct)
+        mask &= (hero_stats['Scalper_PL'] >= min_scalp_pl)
+        
+        result = hero_stats[mask].copy()
+        result = result.sort_values('Net_PL', ascending=False).head(20)
+        
+        # 數值格式化
+        for col in ['Net_PL', 'Scalper_PL', 'Gains', 'Losses', 'Sharpe']:
+            if col in result.columns:
+                result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
+        
+        for col in ['Win_Rate', 'Scalper_Ratio', 'Profit_Factor', 'MDD_Pct']:
+            if col in result.columns:
+                result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
+        
+        return result.reset_index(drop=True)
+        
+    except Exception as e:
+        st.error(f"❌ 計算英雄榜時發生錯誤: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame()
-
-    # 計算衍生指標 (向量化)
-    grouped['Win_Rate'] = np.where(grouped['Trade_Count'] > 0,
-                                    (grouped['Wins'] / grouped['Trade_Count'] * 100), 0)
-    
-    grouped['Scalp_Pct'] = np.where(grouped['Trade_Count'] > 0,
-                                     (grouped['Scalp_Count'] / grouped['Trade_Count'] * 100), 0)
-    
-    grouped['Sharpe'] = np.where((grouped['Trade_Count'] >= 3) & (grouped['Std_PL'] > 0),
-                                  grouped['Mean_PL'] / grouped['Std_PL'], 0.0)
-
-    # 計算 Q1, Median, Q3, IQR
-    quantiles = closing_df.groupby(aid_col, observed=True)['Net_PL'].quantile([0.25, 0.5, 0.75]).unstack()
-    quantiles.columns = ['Q1', 'Median', 'Q3']
-    quantiles['IQR'] = quantiles['Q3'] - quantiles['Q1']
-    quantiles = quantiles.reset_index()
-    # 確保欄位名稱統一為 'AID'
-    quantiles.columns = ['AID', 'Q1', 'Median', 'Q3', 'IQR']
-    
-    grouped = grouped.merge(quantiles, on='AID', how='left')
-
-    # 計算 Profit Expectancy 與 Profit Factor (向量化優化)
-    # 預先計算每個 AID 的獲利與虧損統計
-    win_mask = closing_df['Net_PL'] > 0
-    loss_mask = closing_df['Net_PL'] < 0
-    
-    win_stats = closing_df[win_mask].groupby(aid_col, observed=True)['Net_PL'].agg(['sum', 'mean', 'count']).reset_index()
-    win_stats.columns = ['AID', 'Win_Sum', 'Avg_Win', 'Win_Count']
-    
-    loss_stats = closing_df[loss_mask].groupby(aid_col, observed=True)['Net_PL'].agg(['sum', 'mean', 'count']).reset_index()
-    loss_stats.columns = ['AID', 'Loss_Sum', 'Avg_Loss', 'Loss_Count']
-    
-    # 合併獲利與虧損統計
-    grouped = grouped.merge(win_stats, on='AID', how='left')
-    grouped = grouped.merge(loss_stats, on='AID', how='left')
-    
-    # 填充缺失值
-    grouped['Win_Sum'] = grouped['Win_Sum'].fillna(0)
-    grouped['Avg_Win'] = grouped['Avg_Win'].fillna(0)
-    grouped['Win_Count'] = grouped['Win_Count'].fillna(0)
-    grouped['Loss_Sum'] = grouped['Loss_Sum'].fillna(0)
-    grouped['Avg_Loss'] = grouped['Avg_Loss'].fillna(0)
-    grouped['Loss_Count'] = grouped['Loss_Count'].fillna(0)
-    
-    # 向量化計算 P_Exp
-    grouped['Win_Prob'] = grouped['Win_Count'] / grouped['Trade_Count']
-    grouped['Loss_Prob'] = grouped['Loss_Count'] / grouped['Trade_Count']
-    grouped['P_Exp'] = (grouped['Win_Prob'] * grouped['Avg_Win']) - (grouped['Loss_Prob'] * grouped['Avg_Loss'].abs())
-    
-    # 向量化計算 PF
-    grouped['Total_Losses'] = grouped['Loss_Sum'].abs()
-    grouped['PF'] = np.where(
-        grouped['Total_Losses'] > 0,
-        grouped['Win_Sum'] / grouped['Total_Losses'],
-        np.where(grouped['Win_Sum'] > 0, 5.0, 0.0)
-    )
-
-    # 計算 MDD 與 Recovery Factor
-    mdd_rec_stats = []
-    for aid in grouped['AID']:
-        aid_data = closing_df[closing_df[aid_col] == aid]
-        aid_sorted = aid_data.sort_values(exec_col)
-        
-        if len(aid_sorted) >= 2:
-            cumulative_pl = aid_sorted['Net_PL'].cumsum()
-            equity = initial_balance + cumulative_pl
-            running_max = equity.cummax()
-            drawdown = np.where(running_max != 0, (equity - running_max) / running_max * 100, 0)
-            mdd_pct = abs(np.min(drawdown))
-            max_dd_abs = abs((equity - running_max).min())
-        else:
-            mdd_pct = 0.0
-            max_dd_abs = 0.0
-        
-        net_pl = aid_data['Net_PL'].sum()
-        rec_f = net_pl / max_dd_abs if max_dd_abs > 0 else (net_pl if net_pl > 0 else 0.0)
-        
-        mdd_rec_stats.append({'AID': aid, 'MDD_Pct': mdd_pct, 'Rec_F': rec_f})
-    
-    mdd_df = pd.DataFrame(mdd_rec_stats)
-    grouped = grouped.merge(mdd_df, on='AID', how='left')
-
-    # 應用過濾條件
-    if min_scalp_pct is not None:
-        grouped = grouped[grouped['Scalp_Pct'] >= float(min_scalp_pct)]
-    if min_scalp_pl is not None:
-        grouped = grouped[grouped['Scalp_PL'] >= float(min_scalp_pl)]
-    if min_pnl is not None:
-        grouped = grouped[grouped['Net_PL'] >= float(min_pnl)]
-    if min_winrate is not None:
-        grouped = grouped[grouped['Win_Rate'] >= float(min_winrate)]
-    if min_sharpe is not None:
-        grouped = grouped[grouped['Sharpe'] >= float(min_sharpe)]
-    if max_mdd is not None:
-        grouped = grouped[grouped['MDD_Pct'] <= float(max_mdd)]
-
-    # 格式化輸出
-    result = pd.DataFrame({
-        'AID': grouped['AID'].astype(str),
-        '盈虧': grouped['Net_PL'].round(2),
-        'Scalp盈虧': grouped['Scalp_PL'].round(2),
-        'Scalp%': grouped['Scalp_Pct'].round(2),
-        'Sharpe': grouped['Sharpe'].round(2),
-        'MDD%': grouped['MDD_Pct'].round(2),
-        'Q1': grouped['Q1'].round(2),
-        'Median': grouped['Median'].round(2),
-        'Q3': grouped['Q3'].round(2),
-        'IQR': grouped['IQR'].round(2),
-        'P. Exp': grouped['P_Exp'].round(2),
-        'PF': grouped['PF'].round(2),
-        'Rec.F': grouped['Rec_F'].round(2),
-        '勝率%': grouped['Win_Rate'].round(2),
-        '筆數': grouped['Trade_Count'].astype(int)
-    })
-
-    # 排序並取前 20
-    result = result.sort_values('盈虧', ascending=False).head(20).reset_index(drop=True)
-    
-    return result
 
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
-    """計算產品 Scalp 拆解 - 向量化版本"""
+    """
+    計算產品 Scalper 分解
+    **修復: 所有 groupby 後都加上 reset_index()**
+    """
+    if day_df is None or day_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
     instrument_col = COLUMN_MAP['instrument']
-    closing_df = filter_closing_trades(day_df)
-
-    if instrument_col not in closing_df.columns or closing_df.empty:
-        return None, None
-
-    # 預計算 scalp mask
-    closing_df = closing_df.copy()
-    closing_df['is_scalp'] = closing_df['Hold_Seconds'] < scalper_threshold_seconds
-
-    # 向量化 groupby 聚合
-    stats = closing_df.groupby(instrument_col, observed=True).agg({
-        'Net_PL': 'sum',
-        'is_scalp': ['sum', 'count', lambda x: (x * closing_df.loc[x.index, 'Net_PL']).sum()]
-    })
     
-    stats.columns = ['Total_PL', 'Scalp_Count', 'Total_Count', 'Scalp_PL']
-    stats = stats.reset_index()
-    stats.columns = ['Product', 'Total_PL', 'Scalp_Count', 'Total_Count', 'Scalp_PL']
+    if instrument_col not in day_df.columns:
+        return pd.DataFrame(), pd.DataFrame()
     
-    stats['NonScalp_PL'] = stats['Total_PL'] - stats['Scalp_PL']
-    stats['Scalp_Pct'] = np.where(stats['Total_Count'] > 0,
-                                   (stats['Scalp_Count'] / stats['Total_Count'] * 100), 0)
+    try:
+        day_df = day_df.copy()
+        day_df['is_scalper'] = day_df['Hold_Seconds'] < scalper_threshold_seconds
+        
+        # 分組聚合 - ✅ 加上 reset_index()
+        product_stats = day_df.groupby(instrument_col, observed=True).agg({
+            'Net_PL': 'sum',
+            'is_scalper': [
+                'sum',
+                lambda x: (x * day_df.loc[x.index, 'Net_PL']).sum()
+            ]
+        }).reset_index()  # ✅ 修復
+        
+        product_stats.columns = ['Product', 'Total_PL', 'Scalper_Count', 'Scalper_PL']
+        product_stats['Non_Scalper_PL'] = product_stats['Total_PL'] - product_stats['Scalper_PL']
+        
+        # 分離盈利和虧損
+        profit_products = product_stats[product_stats['Total_PL'] > 0].copy()
+        loss_products = product_stats[product_stats['Total_PL'] < 0].copy()
+        
+        # 排序
+        profit_products = profit_products.sort_values('Total_PL', ascending=False)
+        loss_products = loss_products.sort_values('Total_PL')
+        
+        return profit_products.reset_index(drop=True), loss_products.reset_index(drop=True)
+        
+    except Exception as e:
+        st.error(f"❌ 計算產品分解時發生錯誤: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
-    # 分離盈利與虧損產品
-    profit_products = stats[stats['Total_PL'] > 0].nlargest(5, 'Total_PL')
-    loss_products = stats[stats['Total_PL'] < 0].nsmallest(5, 'Total_PL')
 
-    return profit_products if not profit_products.empty else None, \
-           loss_products if not loss_products.empty else None
-
-
-@st.cache_data(show_spinner=False, ttl=1800)
-def calculate_deep_behavioral_stats(_client_df, scalper_threshold_seconds):
-    """計算深度行為統計 - 優化版"""
-    # Make a copy to avoid modifying the cached input
-    client_df = _client_df.copy()
+def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
+    """
+    深度行為統計分析
+    **修復: 所有 groupby 後都加上 reset_index()**
+    """
+    if client_df is None or client_df.empty:
+        return {}
+    
     side_col = COLUMN_MAP['side']
-
     total_trades = len(client_df)
-    if total_trades == 0:
-        return {k: 0 for k in ['max_win_streak', 'max_loss_streak', 'max_streak_profit',
-                                'max_streak_loss', 'buy_count', 'sell_count', 'buy_ratio',
-                                'sell_ratio', 'buy_pl', 'sell_pl', 'buy_winrate', 
-                                'sell_winrate', 'scalp_count', 'scalp_ratio', 'scalp_pl',
-                                'scalp_contribution', 'scalp_winrate', 'avg_hold_formatted',
-                                'avg_hold_days', 'profit_per_minute', 'q1', 'median', 'q3', 'iqr']}
-
-    total_pl = client_df['Net_PL'].sum()
-    total_minutes = client_df['Hold_Minutes'].sum() if 'Hold_Minutes' in client_df.columns else 0
-    total_minutes = total_minutes if pd.notna(total_minutes) else 0
-
-    # 連續紀錄計算 (向量化)
-    pnl_signs = (client_df['Net_PL'] > 0).astype(int).values
+    total_pl = float(client_df['Net_PL'].sum())
+    total_minutes = float(client_df['Hold_Minutes'].sum())
     
-    # 使用 numpy diff 找出變化點
-    changes = np.concatenate(([0], np.where(np.diff(pnl_signs) != 0)[0] + 1, [len(pnl_signs)]))
-    streak_lengths = np.diff(changes)
-    streak_types = pnl_signs[changes[:-1]]
-    
-    win_streaks = streak_lengths[streak_types == 1]
-    loss_streaks = streak_lengths[streak_types == 0]
-    
-    max_win_streak = int(win_streaks.max()) if len(win_streaks) > 0 else 0
-    max_loss_streak = int(loss_streaks.max()) if len(loss_streaks) > 0 else 0
-
-    # 連續盈虧金額
-    client_sorted = client_df.sort_values(COLUMN_MAP['execution_time']).copy()
-    client_sorted['streak_group'] = (client_sorted['Net_PL'] > 0).ne(
-        (client_sorted['Net_PL'] > 0).shift()
-    ).cumsum()
-    streak_sums = client_sorted.groupby('streak_group')['Net_PL'].sum()
-    max_streak_profit = float(streak_sums.max()) if not streak_sums.empty else 0
-    max_streak_loss = float(streak_sums.min()) if not streak_sums.empty else 0
-
-    # 多空統計 (向量化)
-    if side_col in client_df.columns:
-        buy_mask = client_df[side_col] == 'BUY'
-        sell_mask = client_df[side_col] == 'SELL'
+    try:
+        # 連續紀錄計算 (向量化)
+        pnl_signs = (client_df['Net_PL'] > 0).astype(int).values
         
-        buy_count = int(buy_mask.sum())
-        sell_count = int(sell_mask.sum())
+        # 使用 numpy diff 找出變化點
+        changes = np.concatenate(([0], np.where(np.diff(pnl_signs) != 0)[0] + 1, [len(pnl_signs)]))
+        streak_lengths = np.diff(changes)
+        streak_types = pnl_signs[changes[:-1]]
         
-        buy_pl = float(client_df.loc[buy_mask, 'Net_PL'].sum()) if buy_count > 0 else 0
-        sell_pl = float(client_df.loc[sell_mask, 'Net_PL'].sum()) if sell_count > 0 else 0
+        win_streaks = streak_lengths[streak_types == 1]
+        loss_streaks = streak_lengths[streak_types == 0]
         
-        buy_wins = int((client_df.loc[buy_mask, 'Net_PL'] > 0).sum()) if buy_count > 0 else 0
-        sell_wins = int((client_df.loc[sell_mask, 'Net_PL'] > 0).sum()) if sell_count > 0 else 0
-    else:
-        buy_count = sell_count = 0
-        buy_pl = sell_pl = 0
-        buy_wins = sell_wins = 0
-
-    buy_ratio = (buy_count / total_trades * 100) if total_trades > 0 else 0
-    sell_ratio = (sell_count / total_trades * 100) if total_trades > 0 else 0
-    buy_winrate = (buy_wins / buy_count * 100) if buy_count > 0 else 0
-    sell_winrate = (sell_wins / sell_count * 100) if sell_count > 0 else 0
-
-    # Scalper 統計 (向量化)
-    scalp_mask = client_df['Hold_Seconds'] < scalper_threshold_seconds
-    scalp_count = int(scalp_mask.sum())
-    scalp_pl = float(client_df.loc[scalp_mask, 'Net_PL'].sum()) if scalp_count > 0 else 0
-    scalp_wins = int((client_df.loc[scalp_mask, 'Net_PL'] > 0).sum()) if scalp_count > 0 else 0
-
-    scalp_ratio = (scalp_count / total_trades * 100) if total_trades > 0 else 0
-    scalp_contribution = (scalp_pl / total_pl * 100) if total_pl != 0 else 0
-    scalp_winrate = (scalp_wins / scalp_count * 100) if scalp_count > 0 else 0
-
-    # Box Plot 指標
-    q1 = float(client_df['Net_PL'].quantile(0.25))
-    median = float(client_df['Net_PL'].median())
-    q3 = float(client_df['Net_PL'].quantile(0.75))
-    iqr = q3 - q1
-
-    # 時間效率
-    avg_minutes = total_minutes / total_trades if total_trades > 0 else 0
-    profit_per_minute = total_pl / total_minutes if total_minutes > 0 else 0
-    avg_seconds = avg_minutes * 60
-    
-    hours = int(avg_seconds // 3600)
-    minutes = int((avg_seconds % 3600) // 60)
-    seconds = int(avg_seconds % 60)
-    avg_hold_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    avg_hold_days = avg_minutes / 1440
-
-    return {
-        'max_win_streak': max_win_streak,
-        'max_loss_streak': max_loss_streak,
-        'max_streak_profit': max_streak_profit,
-        'max_streak_loss': max_streak_loss,
-        'buy_count': buy_count,
-        'sell_count': sell_count,
-        'buy_ratio': buy_ratio,
-        'sell_ratio': sell_ratio,
-        'buy_pl': buy_pl,
-        'sell_pl': sell_pl,
-        'buy_winrate': buy_winrate,
-        'sell_winrate': sell_winrate,
-        'scalp_count': scalp_count,
-        'scalp_ratio': scalp_ratio,
-        'scalp_pl': scalp_pl,
-        'scalp_contribution': scalp_contribution,
-        'scalp_winrate': scalp_winrate,
-        'avg_hold_formatted': avg_hold_formatted,
-        'avg_hold_days': avg_hold_days,
-        'profit_per_minute': profit_per_minute,
-        'q1': q1,
-        'median': median,
-        'q3': q3,
-        'iqr': iqr
-    }
+        max_win_streak = int(win_streaks.max()) if len(win_streaks) > 0 else 0
+        max_loss_streak = int(loss_streaks.max()) if len(loss_streaks) > 0 else 0
+        
+        # 連續盈虧金額
+        client_sorted = client_df.sort_values(COLUMN_MAP['execution_time']).copy()
+        client_sorted['streak_group'] = (
+            client_sorted['Net_PL'] > 0
+        ).ne(
+            (client_sorted['Net_PL'] > 0).shift()
+        ).cumsum()
+        
+        # ✅ 修復: 加上 reset_index()
+        streak_sums = (
+            client_sorted.groupby('streak_group', observed=False)['Net_PL']
+            .sum()
+            .reset_index()
+        )
+        
+        max_streak_profit = float(streak_sums['Net_PL'].max()) if not streak_sums.empty else 0
+        max_streak_loss = float(streak_sums['Net_PL'].min()) if not streak_sums.empty else 0
+        
+        # 多空統計 (向量化)
+        if side_col in client_df.columns:
+            buy_mask = client_df[side_col] == 'BUY'
+            sell_mask = client_df[side_col] == 'SELL'
+            
+            buy_count = int(buy_mask.sum())
+            sell_count = int(sell_mask.sum())
+            
+            buy_pl = float(client_df.loc[buy_mask, 'Net_PL'].sum()) if buy_count > 0 else 0
+            sell_pl = float(client_df.loc[sell_mask, 'Net_PL'].sum()) if sell_count > 0 else 0
+            
+            buy_wins = int((client_df.loc[buy_mask, 'Net_PL'] > 0).sum()) if buy_count > 0 else 0
+            sell_wins = int((client_df.loc[sell_mask, 'Net_PL'] > 0).sum()) if sell_count > 0 else 0
+        else:
+            buy_count = sell_count = 0
+            buy_pl = sell_pl = 0
+            buy_wins = sell_wins = 0
+        
+        buy_ratio = (buy_count / total_trades * 100) if total_trades > 0 else 0
+        sell_ratio = (sell_count / total_trades * 100) if total_trades > 0 else 0
+        buy_winrate = (buy_wins / buy_count * 100) if buy_count > 0 else 0
+        sell_winrate = (sell_wins / sell_count * 100) if sell_count > 0 else 0
+        
+        # Scalper 統計 (向量化)
+        scalp_mask = client_df['Hold_Seconds'] < scalper_threshold_seconds
+        scalp_count = int(scalp_mask.sum())
+        scalp_pl = float(client_df.loc[scalp_mask, 'Net_PL'].sum()) if scalp_count > 0 else 0
+        scalp_wins = int((client_df.loc[scalp_mask, 'Net_PL'] > 0).sum()) if scalp_count > 0 else 0
+        
+        scalp_ratio = (scalp_count / total_trades * 100) if total_trades > 0 else 0
+        scalp_contribution = (scalp_pl / total_pl * 100) if total_pl != 0 else 0
+        scalp_winrate = (scalp_wins / scalp_count * 100) if scalp_count > 0 else 0
+        
+        # Box Plot 指標
+        q1 = float(client_df['Net_PL'].quantile(0.25))
+        median = float(client_df['Net_PL'].median())
+        q3 = float(client_df['Net_PL'].quantile(0.75))
+        iqr = q3 - q1
+        
+        # 時間效率
+        avg_minutes = total_minutes / total_trades if total_trades > 0 else 0
+        profit_per_minute = total_pl / total_minutes if total_minutes > 0 else 0
+        avg_seconds = avg_minutes * 60
+        
+        hours = int(avg_seconds // 3600)
+        minutes = int((avg_seconds % 3600) // 60)
+        seconds = int(avg_seconds % 60)
+        avg_hold_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        avg_hold_days = avg_minutes / 1440
+        
+        return {
+            'max_win_streak': max_win_streak,
+            'max_loss_streak': max_loss_streak,
+            'max_streak_profit': max_streak_profit,
+            'max_streak_loss': max_streak_loss,
+            'buy_count': buy_count,
+            'sell_count': sell_count,
+            'buy_ratio': buy_ratio,
+            'sell_ratio': sell_ratio,
+            'buy_pl': buy_pl,
+            'sell_pl': sell_pl,
+            'buy_winrate': buy_winrate,
+            'sell_winrate': sell_winrate,
+            'scalp_count': scalp_count,
+            'scalp_ratio': scalp_ratio,
+            'scalp_pl': scalp_pl,
+            'scalp_contribution': scalp_contribution,
+            'scalp_winrate': scalp_winrate,
+            'avg_hold_formatted': avg_hold_formatted,
+            'avg_hold_days': avg_hold_days,
+            'profit_per_minute': profit_per_minute,
+            'q1': q1,
+            'median': median,
+            'q3': q3,
+            'iqr': iqr
+        }
+        
+    except Exception as e:
+        st.error(f"❌ 計算行為統計時發生錯誤: {e}")
+        return {
+            'max_win_streak': 0, 'max_loss_streak': 0,
+            'max_streak_profit': 0, 'max_streak_loss': 0,
+            'buy_count': 0, 'sell_count': 0,
+            'buy_ratio': 0, 'sell_ratio': 0,
+            'buy_pl': 0, 'sell_pl': 0,
+            'buy_winrate': 0, 'sell_winrate': 0,
+            'scalp_count': 0, 'scalp_ratio': 0,
+            'scalp_pl': 0, 'scalp_contribution': 0,
+            'scalp_winrate': 0, 'avg_hold_formatted': '00:00:00',
+            'avg_hold_days': 0, 'profit_per_minute': 0,
+            'q1': 0, 'median': 0, 'q3': 0, 'iqr': 0
+        }
 
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def get_client_details(_df, aid, initial_balance, scalper_threshold_seconds):
-    """獲取客戶詳細資料 (Tab 2 用)"""
+    """
+    獲取客戶詳細資料 (Tab 2 用)
+    **修復: 所有 groupby 後都加上 reset_index()**
+    """
+    if _df is None or _df.empty:
+        return None
+    
     aid_col = COLUMN_MAP['aid']
     exec_col = COLUMN_MAP['execution_time']
     instrument_col = COLUMN_MAP['instrument']
     closed_pl_col = COLUMN_MAP['closed_pl']
-
-    closing_df = filter_closing_trades(_df)
-    client_df = closing_df[closing_df[aid_col] == str(aid)].copy()
     
-    if client_df.empty:
+    try:
+        closing_df = filter_closing_trades(_df)
+        client_df = closing_df[closing_df[aid_col] == str(aid)].copy()
+        
+        if client_df.empty:
+            return None
+        
+        # 基礎統計
+        net_pl = float(client_df['Net_PL'].sum())
+        trade_count = len(client_df)
+        wins = int((client_df['Net_PL'] > 0).sum())
+        win_rate = (wins / trade_count * 100) if trade_count > 0 else 0
+        
+        avg_hold_seconds = client_df['Hold_Seconds'].mean()
+        avg_hold_seconds = float(avg_hold_seconds) if pd.notna(avg_hold_seconds) else 0
+        
+        # Profit Factor
+        gains = float(client_df[client_df[closed_pl_col] > 0][closed_pl_col].sum())
+        losses = float(abs(client_df[client_df[closed_pl_col] < 0][closed_pl_col].sum()))
+        profit_factor = gains / losses if losses > 0 else (5.0 if gains > 0 else 0)
+        
+        # Sharpe
+        sharpe = calculate_sharpe_vectorized(client_df['Net_PL'])
+        
+        # MDD
+        mdd_pct = calculate_mdd_vectorized(client_df, initial_balance, exec_col)
+        
+        # 累積 PL 計算
+        client_sorted = client_df.sort_values(exec_col).copy()
+        client_sorted['Cumulative_PL'] = client_sorted['Net_PL'].cumsum()
+        
+        scalper_mask = client_sorted['Hold_Seconds'] < scalper_threshold_seconds
+        client_sorted['Scalper_PL'] = np.where(scalper_mask, client_sorted['Net_PL'], 0)
+        client_sorted['Scalper_Cumulative_PL'] = client_sorted['Scalper_PL'].cumsum()
+        
+        # Symbol 分佈 - ✅ 加上 reset_index()
+        if instrument_col in client_df.columns:
+            symbol_dist = (
+                client_df.groupby(instrument_col, observed=True)
+                .size()
+                .reset_index(name='Count')  # ✅ 修復
+            )
+            symbol_dist.columns = ['Symbol', 'Count']
+        else:
+            symbol_dist = pd.DataFrame()
+        
+        # 行為統計
+        behavioral_stats = calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds)
+        
+        return {
+            'net_pl': net_pl,
+            'trade_count': trade_count,
+            'win_rate': win_rate,
+            'avg_hold_seconds': avg_hold_seconds,
+            'profit_factor': profit_factor,
+            'sharpe': sharpe,
+            'mdd_pct': mdd_pct,
+            'cumulative_df': client_sorted[[exec_col, 'Cumulative_PL', 'Scalper_Cumulative_PL']],
+            'symbol_dist': symbol_dist,
+            'client_df': client_df,
+            'behavioral': behavioral_stats
+        }
+        
+    except Exception as e:
+        st.error(f"❌ 獲取客戶詳情時發生錯誤 (AID: {aid}): {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
-
-    # 基礎統計
-    net_pl = float(client_df['Net_PL'].sum())
-    trade_count = len(client_df)
-    wins = int((client_df['Net_PL'] > 0).sum())
-    win_rate = (wins / trade_count * 100) if trade_count > 0 else 0
-    
-    avg_hold_seconds = client_df['Hold_Seconds'].mean()
-    avg_hold_seconds = float(avg_hold_seconds) if pd.notna(avg_hold_seconds) else 0
-
-    # Profit Factor
-    gains = float(client_df[client_df[closed_pl_col] > 0][closed_pl_col].sum())
-    losses = float(abs(client_df[client_df[closed_pl_col] < 0][closed_pl_col].sum()))
-    profit_factor = gains / losses if losses > 0 else (5.0 if gains > 0 else 0)
-
-    # Sharpe
-    sharpe = calculate_sharpe_vectorized(client_df['Net_PL'])
-
-    # MDD
-    mdd_pct = calculate_mdd_vectorized(client_df, initial_balance, exec_col)
-
-    # 累積 PL 計算
-    client_sorted = client_df.sort_values(exec_col).copy()
-    client_sorted['Cumulative_PL'] = client_sorted['Net_PL'].cumsum()
-    
-    scalper_mask = client_sorted['Hold_Seconds'] < scalper_threshold_seconds
-    client_sorted['Scalper_PL'] = np.where(scalper_mask, client_sorted['Net_PL'], 0)
-    client_sorted['Scalper_Cumulative_PL'] = client_sorted['Scalper_PL'].cumsum()
-
-    # Symbol 分佈
-    if instrument_col in client_df.columns:
-        symbol_dist = client_df.groupby(instrument_col, observed=True).size().reset_index(name='Count')
-        symbol_dist.columns = ['Symbol', 'Count']
-    else:
-        symbol_dist = pd.DataFrame()
-
-    # 行為統計
-    behavioral_stats = calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds)
-
-    return {
-        'net_pl': net_pl,
-        'trade_count': trade_count,
-        'win_rate': win_rate,
-        'avg_hold_seconds': avg_hold_seconds,
-        'profit_factor': profit_factor,
-        'sharpe': sharpe,
-        'mdd_pct': mdd_pct,
-        'cumulative_df': client_sorted[[exec_col, 'Cumulative_PL', 'Scalper_Cumulative_PL']],
-        'symbol_dist': symbol_dist,
-        'client_df': client_df,
-        'behavioral': behavioral_stats
-    }
 
 
 def get_client_ranking(aid_stats_df, aid, metric='Net_PL'):
     """獲取客戶排名"""
-    sorted_df = aid_stats_df.sort_values(metric, ascending=False).reset_index(drop=True)
+    if aid_stats_df is None or aid_stats_df.empty:
+        return None, 0
+    
     try:
-        rank = sorted_df[sorted_df['AID'] == str(aid)].index[0] + 1
+        sorted_df = aid_stats_df.sort_values(metric, ascending=False).reset_index(drop=True)
+        rank_df = sorted_df[sorted_df['AID'] == str(aid)]
+        
+        if rank_df.empty:
+            return None, len(sorted_df)
+        
+        rank = rank_df.index[0] + 1
         return int(rank), len(sorted_df)
-    except:
-        return None, len(sorted_df)
+    except Exception as e:
+        st.error(f"❌ 計算排名時發生錯誤: {e}")
+        return None, 0
 
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def export_to_excel(_df, _aid_stats_df, initial_balance, scalper_threshold_seconds):
     """匯出至 Excel - 優化版"""
-    from openpyxl.styles import Font, PatternFill, Alignment
+    if _df is None or _df.empty or _aid_stats_df is None or _aid_stats_df.empty:
+        st.warning("⚠️ 無數據可匯出")
+        return BytesIO()
     
-    output = BytesIO()
-    closing_df = filter_closing_trades(_df)
-    aid_col = COLUMN_MAP['aid']
+    try:
+        from openpyxl.styles import Font, PatternFill, Alignment
+        
+        output = BytesIO()
+        closing_df = filter_closing_trades(_df)
+        aid_col = COLUMN_MAP['aid']
+        
+        # Summary
+        summary_df = pd.DataFrame([
+            ['總交易筆數', len(_df)],
+            ['平倉交易筆數', len(closing_df)],
+            ['總客戶數', _df[aid_col].nunique()],
+            ['總淨盈虧', round(closing_df['Net_PL'].sum(), 2)],
+            ['初始資金', initial_balance]
+        ], columns=['指標', '數值'])
+        
+        # Risk Return (優化: 只選取需要的欄位)
+        risk_cols = [
+            'AID', 'Net_PL', 'MDD_Pct', 'Sharpe', 'Trade_Count',
+            'Win_Rate', 'Profit_Factor', 'Scalper_Ratio', 'Q1', 'Median', 'Q3'
+        ]
+        
+        available_cols = [col for col in risk_cols if col in _aid_stats_df.columns]
+        risk_return_df = _aid_stats_df[available_cols].sort_values('Net_PL', ascending=False)
+        
+        # 寫入 Excel (優化: 減少格式設置次數)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            risk_return_df.to_excel(writer, sheet_name='Risk_Return', index=False)
+            
+            # 統一格式設置
+            header_font = Font(bold=True, color='FFFFFF')
+            header_fill = PatternFill(start_color='2E86AB', end_color='2E86AB', fill_type='solid')
+            header_align = Alignment(horizontal='center')
+            
+            for sheet_name in writer.sheets:
+                ws = writer.sheets[sheet_name]
+                # 只設置第一行
+                for cell in ws[1]:
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = header_align
+        
+        output.seek(0)
+        return output
+        
+    except Exception as e:
+        st.error(f"❌ Excel 匯出時發生錯誤: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return BytesIO()
 
-    # Summary
-    summary_df = pd.DataFrame([
-        ['總交易筆數', len(_df)],
-        ['平倉交易筆數', len(closing_df)],
-        ['總客戶數', _df[aid_col].nunique()],
-        ['總淨盈虧', round(closing_df['Net_PL'].sum(), 2)],
-        ['初始資金', initial_balance]
-    ], columns=['指標', '數值'])
 
-    # Risk Return (優化: 只選取需要的欄位)
-    risk_cols = ['AID', 'Net_PL', 'MDD_Pct', 'Sharpe', 'Trade_Count',
-                 'Win_Rate', 'Profit_Factor', 'Scalper_Ratio', 'Q1', 'Median', 'Q3']
+# ==================== 新增：個人產品盈虧分析 (Tab 2) ====================
+
+@st.cache_data(show_spinner=False, ttl=1800)
+def calculate_client_product_breakdown(_client_df, scalper_threshold_seconds):
+    """
+    計算單一客戶的產品級別盈虧分解 (含 Scalp 分類)
     
-    risk_return_df = _aid_stats_df[risk_cols].sort_values('Net_PL', ascending=False)
-
-    # 寫入 Excel (優化: 減少格式設置次數)
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        summary_df.to_excel(writer, sheet_name='Summary', index=False)
-        risk_return_df.to_excel(writer, sheet_name='Risk_Return', index=False)
+    參數:
+        _client_df: 單一 AID 的交易數據 DataFrame
+        scalper_threshold_seconds: Scalper 秒數門檻
+    
+    返回:
+        DataFrame with columns: ['Symbol', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']
+    """
+    if _client_df is None or _client_df.empty:
+        return pd.DataFrame()
+    
+    try:
+        instrument_col = COLUMN_MAP['instrument']
         
-        # 統一格式設置
-        header_font = Font(bold=True, color='FFFFFF')
-        header_fill = PatternFill(start_color='2E86AB', end_color='2E86AB', fill_type='solid')
-        header_align = Alignment(horizontal='center')
+        # 確保有 Hold_Seconds 欄位
+        if 'Hold_Seconds' not in _client_df.columns:
+            st.warning("⚠️ 缺少 Hold_Seconds 欄位，無法分類 Scalp")
+            return pd.DataFrame()
         
-        for sheet_name in writer.sheets:
-            ws = writer.sheets[sheet_name]
-            # 只設置第一行
-            for cell in ws[1]:
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_align
-
-    output.seek(0)
-    return output
+        df = _client_df.copy()
+        
+        # 向量化分類 Scalp
+        df['Is_Scalp'] = df['Hold_Seconds'] < scalper_threshold_seconds
+        
+        # 按產品和 Scalp 分組聚合
+        product_agg = (
+            df.groupby([instrument_col, 'Is_Scalp'], observed=True)['Net_PL']
+            .sum()
+            .reset_index()  # ✅ 防止 KeyError
+        )
+        
+        # Pivot 表格：行=產品，列=Scalp/NonScalp
+        product_pivot = product_agg.pivot_table(
+            index=instrument_col,
+            columns='Is_Scalp',
+            values='Net_PL',
+            fill_value=0
+        ).reset_index()  # ✅ 防止 KeyError
+        
+        # 重命名欄位
+        product_pivot.columns.name = None
+        if True in product_pivot.columns and False in product_pivot.columns:
+            product_pivot = product_pivot.rename(columns={
+                True: 'Scalp_PL',
+                False: 'NonScalp_PL'
+            })
+        elif True in product_pivot.columns:
+            product_pivot = product_pivot.rename(columns={True: 'Scalp_PL'})
+            product_pivot['NonScalp_PL'] = 0
+        elif False in product_pivot.columns:
+            product_pivot = product_pivot.rename(columns={False: 'NonScalp_PL'})
+            product_pivot['Scalp_PL'] = 0
+        else:
+            product_pivot['Scalp_PL'] = 0
+            product_pivot['NonScalp_PL'] = 0
+        
+        # 重命名產品欄位
+        product_pivot = product_pivot.rename(columns={instrument_col: 'Symbol'})
+        
+        # 計算總盈虧
+        product_pivot['Total_PL'] = product_pivot['Scalp_PL'] + product_pivot['NonScalp_PL']
+        
+        # 排序並返回
+        product_pivot = product_pivot.sort_values('Total_PL', ascending=False)
+        
+        return product_pivot[['Symbol', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']]
+        
+    except Exception as e:
+        st.error(f"❌ 計算產品盈虧時發生錯誤: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return pd.DataFrame()

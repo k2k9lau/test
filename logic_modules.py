@@ -193,14 +193,16 @@ def create_cumulative_pnl_chart(_df, initial_balance, scalper_threshold_seconds)
         y=merged_df['Cumulative_PL'],
         mode='lines+markers',
         name='整體累計',
-        line=dict(color='#2E86AB', width=2.5)
+        line=dict(color='#2E86AB', width=2.5),
+        hovertemplate='<b>日期:</b> %{x|%Y-%m-%d}<br><b>累計:</b> $%{y:,.2f}<extra></extra>'
     ))
     fig.add_trace(go.Scatter(
         x=merged_df['Date'],
         y=merged_df['Scalper_Cumulative_PL'],
         mode='lines+markers',
         name=f'Scalper (<{scalper_minutes:.0f}分鐘)',
-        line=dict(color='#F39C12', width=2.5, dash='dot')
+        line=dict(color='#F39C12', width=2.5, dash='dot'),
+        hovertemplate='<b>日期:</b> %{x|%Y-%m-%d}<br><b>Scalper:</b> $%{y:,.2f}<extra></extra>'
     ))
     fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.5)
     fig.update_layout(
@@ -208,7 +210,9 @@ def create_cumulative_pnl_chart(_df, initial_balance, scalper_threshold_seconds)
         xaxis_title='日期',
         yaxis_title='累計淨盈虧 ($)',
         height=450,
-        legend=dict(orientation="h", y=1.02),
+        hovermode='x unified',
+        legend=dict(orientation="h", y=1.02, x=0),
+        margin=dict(l=60, r=30, t=80, b=60),
         plot_bgcolor='rgba(248,249,250,1)'
     )
 
@@ -439,20 +443,24 @@ def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
         y=_cumulative_df['Cumulative_PL'],
         mode='lines',
         name='累計總盈虧',
-        line=dict(color='#2E86AB', width=2)
+        line=dict(color='#2E86AB', width=2),
+        hovertemplate='<b>時間:</b> %{x|%Y-%m-%d %H:%M}<br><b>累計:</b> $%{y:,.2f}<extra></extra>'
     ))
     fig.add_trace(go.Scatter(
         x=_cumulative_df[exec_col],
         y=_cumulative_df['Scalper_Cumulative_PL'],
         mode='lines',
         name=f'Scalper (<{scalper_minutes}分鐘)',
-        line=dict(color='#F39C12', width=2, dash='dot')
+        line=dict(color='#F39C12', width=2, dash='dot'),
+        hovertemplate='<b>時間:</b> %{x|%Y-%m-%d %H:%M}<br><b>Scalper:</b> $%{y:,.2f}<extra></extra>'
     ))
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
     fig.update_layout(
         title='📈 個人累計盈虧',
         height=350,
-        legend=dict(orientation="h", y=1.05),
+        hovermode='x unified',
+        legend=dict(orientation="h", y=1.05, x=0),
+        margin=dict(l=60, r=30, t=60, b=50),
         plot_bgcolor='rgba(248,249,250,1)'
     )
     return fig
@@ -503,4 +511,92 @@ def create_stacked_product_chart(_product_df, is_profit=True):
     )
     fig.add_vline(x=0, line_color="black", line_width=1)
 
+    return fig
+
+
+# ==================== 新增：個人產品盈虧分析 (Tab 2) ====================
+
+# 定義統一的顏色映射 (與 Tab 3 一致)
+COLOR_MAP = {
+    'profit': {
+        'NonScalp': '#1E8449',  # 深綠色
+        'Scalp': '#82E0AA'      # 淺綠色
+    },
+    'loss': {
+        'NonScalp': '#922B21',  # 深紅色
+        'Scalp': '#F1948A'      # 淺紅色
+    }
+}
+
+
+@st.cache_data(show_spinner=False, ttl=1800)
+def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
+    """
+    創建個人 Top N 產品水平條形圖 (Tab 2 用)
+    
+    參數:
+        _product_df: 產品盈虧 DataFrame，包含 ['Symbol', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']
+        is_profit: True=盈利產品, False=虧損產品
+        top_n: 顯示前 N 名
+    """
+    if _product_df is None or _product_df.empty:
+        return None
+    
+    df = _product_df.copy()
+    
+    # 選擇顏色方案
+    if is_profit:
+        colors = COLOR_MAP['profit']
+        title = f'📈 Top {top_n} 盈利產品'
+        # 盈利產品：從大到小排序
+        df = df.nlargest(top_n, 'Total_PL')
+    else:
+        colors = COLOR_MAP['loss']
+        title = f'📉 Top {top_n} 虧損產品'
+        # 虧損產品：從小到大排序（最虧的在前）
+        df = df.nsmallest(top_n, 'Total_PL')
+    
+    # 反轉順序，讓最大/最小的顯示在最上方
+    df = df.iloc[::-1]
+    
+    fig = go.Figure()
+    
+    # 添加 Non-Scalp 條形
+    fig.add_trace(go.Bar(
+        y=df['Symbol'],
+        x=df['NonScalp_PL'],
+        name='Non-Scalp',
+        orientation='h',
+        marker_color=colors['NonScalp'],
+        text=df['NonScalp_PL'].apply(lambda x: f"${x:,.0f}" if abs(x) >= 1 else ""),
+        textposition='inside',
+        hovertemplate='<b>產品:</b> %{y}<br><b>Non-Scalp:</b> $%{x:,.2f}<extra></extra>'
+    ))
+    
+    # 添加 Scalp 條形
+    fig.add_trace(go.Bar(
+        y=df['Symbol'],
+        x=df['Scalp_PL'],
+        name='Scalp',
+        orientation='h',
+        marker_color=colors['Scalp'],
+        text=df['Scalp_PL'].apply(lambda x: f"${x:,.0f}" if abs(x) >= 1 else ""),
+        textposition='inside',
+        hovertemplate='<b>產品:</b> %{y}<br><b>Scalp:</b> $%{x:,.2f}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title=title,
+        barmode='relative',
+        xaxis_title='盈虧金額 ($)',
+        yaxis_title='產品',
+        height=300,
+        hovermode='y unified',
+        legend=dict(orientation="h", y=1.15, x=0),
+        margin=dict(l=100, r=30, t=80, b=50),
+        plot_bgcolor='rgba(248,249,250,1)'
+    )
+    
+    fig.add_vline(x=0, line_color="black", line_width=1.5)
+    
     return fig
