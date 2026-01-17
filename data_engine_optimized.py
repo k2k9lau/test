@@ -558,8 +558,9 @@ def calculate_hero_metrics(
 @st.cache_data(show_spinner=False, ttl=1800)
 def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
     """
-    計算產品 Scalper 分解
-    **修復: 所有 groupby 後都加上 reset_index()**
+    計算產品 Scalp vs Non-Scalp 分解 (Tab 3 用)
+    ✅ 修正：確保欄位名稱統一為 Scalp_PL 和 NonScalp_PL
+    ✅ 修正：所有 groupby 後都加上 reset_index()
     """
     if day_df is None or day_df.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -582,6 +583,7 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
             ]
         }).reset_index()  # ✅ 修復
         
+        # ✅ 統一命名
         product_stats.columns = ['Product', 'Total_PL', 'Scalper_Count', 'Scalp_PL']
         product_stats['NonScalp_PL'] = product_stats['Total_PL'] - product_stats['Scalp_PL']
         
@@ -597,6 +599,8 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
         
     except Exception as e:
         st.error(f"❌ 計算產品分解時發生錯誤: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame(), pd.DataFrame()
 
 
