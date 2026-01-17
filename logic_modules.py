@@ -26,8 +26,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
-from dataclasses import dataclass, field, asdict
-
+from dataclasses import dataclass, field, a
+import plotly.express as px
+import plotly.graph_objects as go
 
 # ============================================================
 #                    資料類別定義
@@ -605,6 +606,65 @@ def get_filter_summary(key_prefix: str) -> str:
     
     return " | ".join(parts) if parts else "無過濾條件"
 
+
+
+
+
+def render_violin_plot(sample_df: pd.DataFrame, stats: Dict[str, Any]):
+    """渲染全寬小提琴圖與統計摘要"""
+    st.subheader("🎻 客戶盈虧分佈圖")
+
+    # 建立 Plotly 圖表
+    fig = px.violin(
+        sample_df, y="Net_PL", box=True, points="all",
+        hover_data=["AID"], color_discrete_sequence=['#636EFA']
+    )
+
+    # 加入平均值橫線
+    fig.add_hline(y=stats['mean'], line_dash="dash", line_color="red", annotation_text="平均值")
+
+    fig.update_layout(height=500, margin=dict(l=20, r=20, t=20, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 顯示統計摘要
+    with st.expander("📊 點擊查看數據分佈詳情"):
+        col1, col2, col3 = st.columns(3)
+        col1.metric("樣本數", f"{stats['sample_size']:,}")
+        col2.metric("中位數", f"${stats['median']:,.2f}")
+        col3.metric("獲利客戶數", f"{stats['profitable']:,}")
+
+
+def render_style_charts(df: pd.DataFrame):
+    """並排渲染獲利因子與交易風格圖"""
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("📈 獲利因子分佈 (範例)")
+        # 這裡放置原有的獲利因子圖表代碼
+    with col2:
+        st.write("🎯 全公司交易風格 (範例)")
+        # 這裡放置原有的散佈圖代碼
+
+
+def render_hero_table(df: pd.DataFrame, key: str):
+    """渲染帶有一鍵複製 AID 功能的英雄榜表格"""
+    st.dataframe(
+        df,
+        use_container_width=True,
+        column_config={
+            "AID": st.column_config.TextColumn(
+                "AID",
+                help="點擊儲存格右側圖示可直接複製",
+                width="medium"
+            )
+        },
+        key=key
+    )
+
+
+def clean_aid_input(raw_input: str) -> str:
+    """清理 AID 輸入字串"""
+    if not raw_input: return ""
+    return "".join(filter(str.isdigit, str(raw_input)))
 
 # ============================================================
 #                    測試區塊
