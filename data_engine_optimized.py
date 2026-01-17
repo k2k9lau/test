@@ -393,11 +393,13 @@ def calculate_hero_metrics(
     min_sharpe=-10.0,
     max_mdd=100.0,
     min_scalp_pct=0.0,
-    min_scalp_pl=0.0
+    min_scalp_pl=0.0,
+    _cache_version="v2.7"  # ✅ 新增：快取版本號，修改此值可強制刷新快取
 ):
     """
     計算英雄榜指標
     **修復: 所有 groupby 後都加上 reset_index()**
+    **v2.7: 新增快取版本號以解決欄位變更後快取問題**
     """
     if df is None or df.empty:
         return pd.DataFrame()
