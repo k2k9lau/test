@@ -502,6 +502,21 @@ def create_stacked_product_chart(_product_df, is_profit=True):
     # 🔍 調試：顯示接收到的欄位
     # st.write(f"🔍 Debug - 接收到的欄位: {list(df.columns)}")
     
+    # 🛡️ 防禦性邏輯：強制確保欄位存在
+    for col in ['Scalp_PL', 'NonScalp_PL', 'Total_PL']:
+        if col not in df.columns:
+            df[col] = 0.0
+    
+    # 🛡️ 確保 Product 欄位存在
+    if 'Product' not in df.columns:
+        # 嘗試找到可能的產品欄位
+        possible_product_cols = [c for c in df.columns if 'Instrument' in str(c) or 'Symbol' in str(c) or '交易品种' in str(c)]
+        if possible_product_cols:
+            df = df.rename(columns={possible_product_cols[0]: 'Product'})
+        else:
+            st.error(f"❌ 無法找到產品欄位。現有欄位: {list(df.columns)}")
+            return None
+    
     # 🛡️ 防禦性邏輯：檢查必要欄位
     required_cols = ['Product', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']
     missing_cols = [col for col in required_cols if col not in df.columns]
@@ -597,6 +612,21 @@ def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
     
     # 🔍 調試：顯示接收到的欄位
     # st.write(f"🔍 Debug - Tab 2 接收到的欄位: {list(df.columns)}")
+    
+    # 🛡️ 防禦性邏輯：強制確保欄位存在
+    for col in ['Scalp_PL', 'NonScalp_PL', 'Total_PL']:
+        if col not in df.columns:
+            df[col] = 0.0
+    
+    # 🛡️ 確保 Symbol 欄位存在
+    if 'Symbol' not in df.columns:
+        # 嘗試找到可能的產品欄位
+        possible_symbol_cols = [c for c in df.columns if 'Instrument' in str(c) or 'Product' in str(c) or '交易品种' in str(c)]
+        if possible_symbol_cols:
+            df = df.rename(columns={possible_symbol_cols[0]: 'Symbol'})
+        else:
+            st.error(f"❌ 無法找到產品欄位。現有欄位: {list(df.columns)}")
+            return None
     
     # 🛡️ 防禦性邏輯：檢查必要欄位
     required_cols = ['Symbol', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']
