@@ -124,27 +124,31 @@ def format_hero_table_display(hero_df):
 
     display_df = hero_df.copy()
 
-    # Scalp% emoji
-    display_df['Scalp%'] = display_df['Scalp%'].apply(
-        lambda x: f"🔥{x:.1f}%" if x > 80 else f"{x:.1f}%"
-    )
+    # Scalp% emoji - 安全檢查
+    if 'Scalp%' in display_df.columns:
+        display_df['Scalp%'] = display_df['Scalp%'].apply(
+            lambda x: f"🔥{x:.1f}%" if x > 80 else f"{x:.1f}%"
+        )
 
-    # Sharpe 顏色
-    display_df['Sharpe'] = display_df['Sharpe'].apply(
-        lambda x: f"⭐{x:.2f}" if x > 2 else f"{x:.2f}"
-    )
+    # Sharpe 顏色 - 安全檢查
+    if 'Sharpe' in display_df.columns:
+        display_df['Sharpe'] = display_df['Sharpe'].apply(
+            lambda x: f"⭐{x:.2f}" if x > 2 else f"{x:.2f}"
+        )
 
-    # MDD% 紅色警示
-    display_df['MDD%'] = display_df['MDD%'].apply(
-        lambda x: f"🔴{x:.1f}%" if x > 20 else f"{x:.1f}%"
-    )
+    # MDD% 紅色警示 - 安全檢查
+    if 'MDD%' in display_df.columns:
+        display_df['MDD%'] = display_df['MDD%'].apply(
+            lambda x: f"🔴{x:.1f}%" if x > 20 else f"{x:.1f}%"
+        )
 
-    # P.Exp 顏色
-    display_df['P. Exp'] = display_df['P. Exp'].apply(
-        lambda x: f"🟢{x:.2f}" if x > 0 else f"🔴{x:.2f}"
-    )
+    # P.Exp 顏色 - 安全檢查
+    if 'P. Exp' in display_df.columns:
+        display_df['P. Exp'] = display_df['P. Exp'].apply(
+            lambda x: f"🟢{x:.2f}" if x > 0 else f"🔴{x:.2f}"
+        )
 
-    # 金額格式
+    # 金額格式 - 安全檢查
     for col in ['盈虧', 'Scalp盈虧', 'Q1', 'Median', 'Q3', 'IQR']:
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}")

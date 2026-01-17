@@ -491,6 +491,61 @@ def calculate_hero_metrics(
             if col in result.columns:
                 result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
         
+        # ✅ 修復：重命名欄位以符合顯示函數的期望
+        # 將內部使用的欄位名稱轉換為顯示用的欄位名稱
+        result = result.rename(columns={
+            'Scalper_Ratio': 'Scalp%',
+            'Scalper_PL': 'Scalp盈虧',
+            'Net_PL': '盈虧',
+            'Win_Rate': '勝率%',
+            'MDD_Pct': 'MDD%',
+            'Profit_Factor': 'PF'
+        })
+        
+        # 計算額外的顯示欄位
+        # P.Exp (Profit Expectancy) = (Win_Rate * Avg_Win) - (Loss_Rate * Avg_Loss)
+        # 簡化版本：使用 Mean_PL
+        if '盈虧' in result.columns and 'Trade_Count' in result.columns:
+            result['P. Exp'] = result['盈虧'] / result['Trade_Count']
+        
+        # Rec.F (Recovery Factor) = Net_PL / Max_Drawdown
+        if '盈虧' in result.columns and 'MDD%' in result.columns:
+            result['Rec.F'] = np.where(
+                result['MDD%'] > 0,
+                abs(result['盈虧'] / result['MDD%']),
+                0
+            )
+        
+        # 計算 Q1, Median, Q3, IQR (需要從原始數據重新計算)
+        quantile_data = []
+        for aid in result['AID']:
+            aid_data = closing_df[closing_df[aid_col] == aid]['Net_PL']
+            quantile_data.append({
+                'AID': aid,
+                'Q1': float(aid_data.quantile(0.25)),
+                'Median': float(aid_data.median()),
+                'Q3': float(aid_data.quantile(0.75))
+            })
+        
+        if quantile_data:
+            quantile_df = pd.DataFrame(quantile_data)
+            quantile_df['IQR'] = quantile_df['Q3'] - quantile_df['Q1']
+            result = result.merge(quantile_df, on='AID', how='left')
+        
+        # 重新排序欄位
+        column_order = [
+            'AID', '盈虧', 'Scalp盈虧', 'Scalp%', 'Sharpe', 'MDD%',
+            'Q1', 'Median', 'Q3', 'IQR', 'P. Exp', 'PF', 'Rec.F', '勝率%', 'Trade_Count'
+        ]
+        
+        # 只保留存在的欄位
+        existing_cols = [col for col in column_order if col in result.columns]
+        result = result[existing_cols]
+        
+        # 重命名 Trade_Count 為「筆數」
+        if 'Trade_Count' in result.columns:
+            result = result.rename(columns={'Trade_Count': '筆數'})
+        
         return result.reset_index(drop=True)
         
     except Exception as e:
