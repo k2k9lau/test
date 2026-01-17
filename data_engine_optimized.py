@@ -532,10 +532,13 @@ def calculate_hero_metrics(
             quantile_df['IQR'] = quantile_df['Q3'] - quantile_df['Q1']
             result = result.merge(quantile_df, on='AID', how='left')
         
-        # 重新排序欄位
+        # ✅ v2.7 修復：重新排序欄位
+        # AID, 盈虧, Scalp盈虧, Scalp%, 勝率% 在左側
+        # Q1, Median, Q3, IQR 移至最右側
         column_order = [
-            'AID', '盈虧', 'Scalp盈虧', 'Scalp%', 'Sharpe', 'MDD%',
-            'Q1', 'Median', 'Q3', 'IQR', 'P. Exp', 'PF', 'Rec.F', '勝率%', 'Trade_Count'
+            'AID', '盈虧', 'Scalp盈虧', 'Scalp%', '勝率%',
+            'Sharpe', 'MDD%', 'P. Exp', 'PF', 'Rec.F', 'Trade_Count',
+            'Q1', 'Median', 'Q3', 'IQR'
         ]
         
         # 只保留存在的欄位

@@ -94,7 +94,7 @@ def get_table_column_config():
     """
     獲取統一的表格欄位配置 - 確保 AID 為純文字可複製
     
-    ✅ 修復：金額欄位使用 NumberColumn 以支持正確排序
+    ✅ v2.7 修復：所有數值欄位使用 NumberColumn 以支持正確排序
     ✅ 優化：所有欄位使用 small 寬度，配合 CSS 讓所有參數一眼可見
     """
     return {
@@ -112,6 +112,27 @@ def get_table_column_config():
             'Scalp盈虧',
             format='$%.2f',
             width="small"
+        ),
+        # ✅ 修復：Scalp% 使用 NumberColumn 以支持正確排序
+        'Scalp%': st.column_config.NumberColumn(
+            'Scalp%',
+            format='%.1f%%',
+            width="small",
+            help='🔥 > 80% 為剝頭皮客戶'
+        ),
+        # ✅ 修復：Sharpe 使用 NumberColumn 以支持正確排序
+        'Sharpe': st.column_config.NumberColumn(
+            'Sharpe',
+            format='%.2f',
+            width="small",
+            help='⭐ > 2.0 為優秀'
+        ),
+        # ✅ 修復：MDD% 使用 NumberColumn 以支持正確排序
+        'MDD%': st.column_config.NumberColumn(
+            'MDD%',
+            format='%.1f%%',
+            width="small",
+            help='🔴 > 20% 為高風險'
         ),
         'Q1': st.column_config.NumberColumn(
             'Q1',
@@ -133,10 +154,13 @@ def get_table_column_config():
             format='$%.2f',
             width="small"
         ),
-        'Scalp%': st.column_config.TextColumn('Scalp%', width="small"),
-        'Sharpe': st.column_config.TextColumn('Sharpe', width="small"),
-        'MDD%': st.column_config.TextColumn('MDD%', width="small"),
-        'P. Exp': st.column_config.TextColumn('P.Exp', width="small"),
+        # ✅ 修復：P. Exp 使用 NumberColumn 以支持正確排序
+        'P. Exp': st.column_config.NumberColumn(
+            'P.Exp',
+            format='%.2f',
+            width="small",
+            help='🟢 > 0 為正期望值'
+        ),
         'PF': st.column_config.NumberColumn('PF', format='%.2f', width="small"),
         'Rec.F': st.column_config.NumberColumn('Rec.F', format='%.2f', width="small"),
         '勝率%': st.column_config.NumberColumn('勝率%', format='%.1f%%', width="small"),
@@ -151,39 +175,19 @@ def format_hero_table_display(hero_df):
     ⚠️ 重要修復：保留原始數值欄位供 Streamlit 排序使用
     - 金額欄位不再轉換為字串，改用 Streamlit 的 NumberColumn 格式化
     - 這樣可以確保表格排序正確（數值排序而非字串排序）
+    
+    ✅ v2.7 修復：所有需要排序的欄位保持數值格式，emoji 移至 column_config 顯示
     """
     if hero_df.empty:
         return hero_df
 
     display_df = hero_df.copy()
 
-    # Scalp% emoji - 安全檢查
-    # ⚠️ 注意：這會影響排序，但 Scalp% 排序不常用，保留 emoji 顯示
-    if 'Scalp%' in display_df.columns:
-        display_df['Scalp%'] = display_df['Scalp%'].apply(
-            lambda x: f"🔥{x:.1f}%" if x > 80 else f"{x:.1f}%"
-        )
+    # ✅ 修復：Scalp%, Sharpe, MDD%, P. Exp 保持數值格式，不再轉換為字串
+    # 這樣可以確保表格排序正確（數值排序而非字串排序）
+    # Emoji 顯示將透過 get_table_column_config() 實現
 
-    # Sharpe 顏色 - 安全檢查
-    if 'Sharpe' in display_df.columns:
-        display_df['Sharpe'] = display_df['Sharpe'].apply(
-            lambda x: f"⭐{x:.2f}" if x > 2 else f"{x:.2f}"
-        )
-
-    # MDD% 紅色警示 - 安全檢查
-    if 'MDD%' in display_df.columns:
-        display_df['MDD%'] = display_df['MDD%'].apply(
-            lambda x: f"🔴{x:.1f}%" if x > 20 else f"{x:.1f}%"
-        )
-
-    # P.Exp 顏色 - 安全檢查
-    if 'P. Exp' in display_df.columns:
-        display_df['P. Exp'] = display_df['P. Exp'].apply(
-            lambda x: f"🟢{x:.2f}" if x > 0 else f"🔴{x:.2f}"
-        )
-
-    # ✅ 修復：金額欄位保持數值格式，不轉換為字串
-    # 這樣 Streamlit 表格的排序功能才能正確工作（數值排序而非字串排序）
+    # ✅ 金額欄位保持數值格式，不轉換為字串
     # 格式化將透過 get_table_column_config() 的 NumberColumn 實現
 
     return display_df
