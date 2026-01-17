@@ -583,18 +583,9 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
             ]
         }).reset_index()  # ✅ 修復
         
-        # ✅ 統一命名 - 加強防禦性邏輯
+        # ✅ 統一命名
         product_stats.columns = ['Product', 'Total_PL', 'Scalper_Count', 'Scalp_PL']
         product_stats['NonScalp_PL'] = product_stats['Total_PL'] - product_stats['Scalp_PL']
-        
-        # 🛡️ 強制確保欄位存在，不論數據內容為何
-        for col in ['Scalp_PL', 'NonScalp_PL', 'Total_PL']:
-            if col not in product_stats.columns:
-                product_stats[col] = 0.0
-        
-        # 🛡️ 清理 Product 欄位中可能的換行符號
-        if 'Product' in product_stats.columns:
-            product_stats['Product'] = product_stats['Product'].astype(str).str.replace('\n', ' ', regex=False).str.strip()
         
         # 分離盈利和虧損
         profit_products = product_stats[product_stats['Total_PL'] > 0].copy()
@@ -973,38 +964,25 @@ def calculate_client_product_breakdown(_client_df, scalper_threshold_seconds):
             fill_value=0
         ).reset_index()  # ✅ 防止 KeyError
         
-        # 重命名欄位 - ✅ 加強防禦性邏輯
+        # 重命名欄位
         product_pivot.columns.name = None
-        
-        # 🛡️ 檢查並重命名 Boolean 欄位
-        current_cols = list(product_pivot.columns)
-        
-        if True in current_cols and False in current_cols:
+        if True in product_pivot.columns and False in product_pivot.columns:
             product_pivot = product_pivot.rename(columns={
                 True: 'Scalp_PL',
                 False: 'NonScalp_PL'
             })
-        elif True in current_cols:
+        elif True in product_pivot.columns:
             product_pivot = product_pivot.rename(columns={True: 'Scalp_PL'})
-            product_pivot['NonScalp_PL'] = 0.0
-        elif False in current_cols:
+            product_pivot['NonScalp_PL'] = 0
+        elif False in product_pivot.columns:
             product_pivot = product_pivot.rename(columns={False: 'NonScalp_PL'})
-            product_pivot['Scalp_PL'] = 0.0
-        
-        # 🛡️ 強制確保欄位存在，不論數據內容為何
-        for col in ['Scalp_PL', 'NonScalp_PL']:
-            if col not in product_pivot.columns:
-                product_pivot[col] = 0.0
-        
-        # 重命名產品欄位 - 🛡️ 清理可能的換行符號
-        if instrument_col in product_pivot.columns:
-            product_pivot = product_pivot.rename(columns={instrument_col: 'Symbol'})
+            product_pivot['Scalp_PL'] = 0
         else:
-            # 嘗試找到包含 'Instrument' 的欄位
-            for col in product_pivot.columns:
-                if 'Instrument' in str(col) or '交易品种' in str(col):
-                    product_pivot = product_pivot.rename(columns={col: 'Symbol'})
-                    break
+            product_pivot['Scalp_PL'] = 0
+            product_pivot['NonScalp_PL'] = 0
+        
+        # 重命名產品欄位
+        product_pivot = product_pivot.rename(columns={instrument_col: 'Symbol'})
         
         # 計算總盈虧
         product_pivot['Total_PL'] = product_pivot['Scalp_PL'] + product_pivot['NonScalp_PL']
