@@ -428,21 +428,25 @@ def main():
                     if rank_overall:
                         st.markdown(f"**🏆 整體排名: 第 {rank_overall} 名 / {total_overall} 人**")
 
-                    # 核心指標
+                    # 核心指標 - 分成兩行顯示，避免數據被截斷
                     st.markdown("### 🎯 核心指標")
-                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+                    
+                    # 第一行：主要盈虧指標
                     pl_icon = "🟢" if client_data['net_pl'] >= 0 else "🔴"
-                    c1.metric(f"{pl_icon} 總盈虧", f"${client_data['net_pl']:,.2f}")
-                    c2.metric("🎯 勝率", f"{client_data['win_rate']:.1f}%")
-                    c3.metric("📊 PF", f"{client_data['profit_factor']:.2f}")
-                    c4.metric("📈 Sharpe", f"{client_data['sharpe']:.2f}")
-                    mdd_icon = "🔴" if client_data['mdd_pct'] > 20 else ""
-                    c5.metric(f"{mdd_icon}MDD%", f"{client_data['mdd_pct']:.1f}%")
-                    c6.metric("📝 筆數", f"{client_data['trade_count']}")
-                    # 新增：剝頭皮盈虧和剝頭皮%
                     scalp_pl_icon = "🟢" if behavioral['scalp_pl'] >= 0 else "🔴"
-                    c7.metric(f"{scalp_pl_icon} Scalp盈虧", f"${behavioral['scalp_pl']:,.2f}")
-                    c8.metric("⚡ Scalp%", f"{behavioral['scalp_ratio']:.1f}%")
+                    row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
+                    row1_c1.metric(f"{pl_icon} 總盈虧", f"${client_data['net_pl']:,.2f}")
+                    row1_c2.metric("🎯 勝率", f"{client_data['win_rate']:.1f}%")
+                    row1_c3.metric("📊 PF", f"{client_data['profit_factor']:.2f}")
+                    row1_c4.metric("📈 Sharpe", f"{client_data['sharpe']:.2f}")
+                    
+                    # 第二行：風險與剝頭皮指標
+                    mdd_icon = "🔴" if client_data['mdd_pct'] > 20 else "🟡"
+                    row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
+                    row2_c1.metric(f"{mdd_icon} MDD%", f"{client_data['mdd_pct']:.1f}%")
+                    row2_c2.metric("📝 筆數", f"{client_data['trade_count']}")
+                    row2_c3.metric(f"{scalp_pl_icon} Scalp盈虧", f"${behavioral['scalp_pl']:,.2f}")
+                    row2_c4.metric("⚡ Scalp%", f"{behavioral['scalp_ratio']:.1f}%")
 
                     # Box Plot 指標
                     st.markdown("### 📦 盈虧分佈統計")
@@ -531,27 +535,56 @@ def main():
                     )
                     
                     if not product_breakdown.empty:
-                        # 分離盈利和虧損產品
-                        profit_products = product_breakdown[product_breakdown['Total_PL'] > 0]
-                        loss_products = product_breakdown[product_breakdown['Total_PL'] < 0]
+                        # 計算產品總和以驗證一致性
+                        product_total = product_breakdown['Total_PL'].sum()
+                        total_diff = abs(client_data['net_pl'] - product_total)
+                        
+                        # 顯示驗證信息（如果差異過大則警告）
+                        if total_diff > 1.0:
+                            st.warning(f"⚠️ 產品盈虧合計 (${product_total:,.2f}) 與總盈虧 (${client_data['net_pl']:,.2f}) 差異 ${total_diff:,.2f}")
+                        
+                        # 分離盈利、虧損和持平產品
+                        profit_products = product_breakdown[product_breakdown['Total_PL'] > 0].copy()
+                        loss_products = product_breakdown[product_breakdown['Total_PL'] < 0].copy()
+                        zero_products = product_breakdown[product_breakdown['Total_PL'] == 0].copy()
                         
                         prod1, prod2 = st.columns(2)
                         
                         with prod1:
+                            st.markdown("#### 📈 Top 5 盈利產品")
                             if not profit_products.empty:
                                 profit_chart = lm.plot_top_products_bar(profit_products, is_profit=True, top_n=5)
                                 if profit_chart:
                                     st.plotly_chart(profit_chart, use_container_width=True)
+                                # 顯示盈利產品小計
+                                profit_sum = profit_products['Total_PL'].sum()
+                                st.caption(f"盈利產品合計: **${profit_sum:,.2f}** ({len(profit_products)} 個產品)")
                             else:
                                 st.info("📊 無盈利產品")
                         
                         with prod2:
+                            st.markdown("#### 📉 Top 5 虧損產品")
                             if not loss_products.empty:
                                 loss_chart = lm.plot_top_products_bar(loss_products, is_profit=False, top_n=5)
                                 if loss_chart:
                                     st.plotly_chart(loss_chart, use_container_width=True)
+                                # 顯示虧損產品小計
+                                loss_sum = loss_products['Total_PL'].sum()
+                                st.caption(f"虧損產品合計: **${loss_sum:,.2f}** ({len(loss_products)} 個產品)")
                             else:
                                 st.info("📊 無虧損產品")
+                        
+                        # 如果有持平產品，顯示提示
+                        if not zero_products.empty:
+                            st.info(f"📊 另有 {len(zero_products)} 個產品盈虧持平")
+                        
+                        # 顯示完整產品明細表（可展開）
+                        with st.expander("📋 查看完整產品明細"):
+                            display_breakdown = product_breakdown.copy()
+                            display_breakdown['Scalp_PL'] = display_breakdown['Scalp_PL'].apply(lambda x: f"${x:,.2f}")
+                            display_breakdown['NonScalp_PL'] = display_breakdown['NonScalp_PL'].apply(lambda x: f"${x:,.2f}")
+                            display_breakdown['Total_PL'] = display_breakdown['Total_PL'].apply(lambda x: f"${x:,.2f}")
+                            st.dataframe(display_breakdown, use_container_width=True, hide_index=True)
                     else:
                         st.info("📊 無產品數據可顯示")
                     
