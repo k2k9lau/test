@@ -12,6 +12,43 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==================== 1.5 自訂 CSS 樣式 ====================
+# 縮小表格欄位寬度，讓所有參數一眼可見
+st.markdown("""
+<style>
+/* 縮小 dataframe 的欄位寬度 */
+.stDataFrame [data-testid="stDataFrameResizable"] {
+    width: 100% !important;
+}
+
+/* 縮小每個欄位的最小寬度 */
+.stDataFrame th {
+    min-width: 60px !important;
+    max-width: 100px !important;
+    padding: 4px 8px !important;
+    font-size: 13px !important;
+}
+
+.stDataFrame td {
+    min-width: 60px !important;
+    max-width: 100px !important;
+    padding: 4px 8px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+}
+
+/* 讓表格更緊湊 */
+.stDataFrame [data-testid="StyledDataFrameTable"] {
+    font-size: 12px !important;
+}
+
+/* 確保數字欄位右對齊 */
+.stDataFrame td[data-type="number"] {
+    text-align: right !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ==================== 2. Session State 初始化 ====================
 def init_session_state():
