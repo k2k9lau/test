@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import data_engine as de  # 引用數據引擎的常數與輔助函數
+import data_engine_optimized as de  # 引用數據引擎的常數與輔助函數
 
 # ==================== 常數定義 (1:1 移植) ====================
 STYLE_COLORS = {
@@ -160,12 +160,13 @@ def clean_aid_input(raw_input: str) -> str:
 
 # ==================== 圖表繪製函數 (1:1 移植) ====================
 
-def create_cumulative_pnl_chart(df, initial_balance, scalper_threshold_seconds):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_cumulative_pnl_chart(_df, initial_balance, scalper_threshold_seconds):
     """創建累計盈虧走勢圖"""
     exec_col = de.COLUMN_MAP['execution_time']
     scalper_minutes = scalper_threshold_seconds / 60
 
-    closing_df = de.filter_closing_trades(df)
+    closing_df = de.filter_closing_trades(_df)
     df_sorted = closing_df.sort_values(exec_col).copy()
     df_sorted['Date'] = df_sorted[exec_col].dt.date
 
@@ -217,10 +218,11 @@ def create_cumulative_pnl_chart(df, initial_balance, scalper_threshold_seconds):
     }
 
 
-def create_violin_plot_with_stats(df):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_violin_plot_with_stats(_df):
     """創建小提琴圖並返回統計數據 (含 Outliers 計算)"""
     aid_col = de.COLUMN_MAP['aid']
-    closing_df = de.filter_closing_trades(df)
+    closing_df = de.filter_closing_trades(_df)
     aid_pl = closing_df.groupby(aid_col)['Net_PL'].sum().reset_index()
     aid_pl.columns = ['AID', 'Net_PL']
 
@@ -278,9 +280,10 @@ def create_violin_plot_with_stats(df):
     return fig, stats
 
 
-def create_trading_style_pie(df, title="交易風格分佈"):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_trading_style_pie(_df, title="交易風格分佈"):
     """創建交易風格圓餅圖"""
-    closing_df = de.filter_closing_trades(df)
+    closing_df = de.filter_closing_trades(_df)
     if 'Hold_Minutes' not in closing_df.columns or closing_df['Hold_Minutes'].isna().all():
         return None
 
@@ -304,9 +307,10 @@ def create_trading_style_pie(df, title="交易風格分佈"):
     return fig
 
 
-def create_profit_factor_chart_colored(aid_stats_df):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_profit_factor_chart_colored(_aid_stats_df):
     """創建獲利因子分佈圖"""
-    pf_data = aid_stats_df[['AID', 'Profit_Factor', 'Net_PL', 'Trade_Count']].copy()
+    pf_data = _aid_stats_df[['AID', 'Profit_Factor', 'Net_PL', 'Trade_Count']].copy()
     pf_display = pf_data[pf_data['Profit_Factor'] <= 5].copy()
 
     bins = [0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
@@ -340,9 +344,10 @@ def create_profit_factor_chart_colored(aid_stats_df):
     return fig, profitable_ratio
 
 
-def create_risk_return_scatter(aid_stats_df, initial_balance):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_risk_return_scatter(_aid_stats_df, initial_balance):
     """創建風險回報矩陣散佈圖"""
-    scatter_df = aid_stats_df.copy()
+    scatter_df = _aid_stats_df.copy()
     min_size, max_size = 10, 50
     if scatter_df['Trade_Volume'].max() > scatter_df['Trade_Volume'].min():
         scatter_df['Size'] = min_size + (
@@ -400,10 +405,11 @@ def create_risk_return_scatter(aid_stats_df, initial_balance):
     return fig
 
 
-def create_daily_pnl_chart(df):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_daily_pnl_chart(_df):
     """創建每日盈虧柱狀圖"""
     exec_col = de.COLUMN_MAP['execution_time']
-    closing_df = de.filter_closing_trades(df)
+    closing_df = de.filter_closing_trades(_df)
     df_daily = closing_df.copy()
     df_daily['Date'] = df_daily[exec_col].dt.date
     daily_pnl = df_daily.groupby('Date')['Net_PL'].sum().reset_index()
@@ -423,20 +429,21 @@ def create_daily_pnl_chart(df):
     return fig
 
 
-def create_client_cumulative_chart(cumulative_df, scalper_minutes):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
     """創建個人累計盈虧圖 (Tab 2 用)"""
     exec_col = de.COLUMN_MAP['execution_time']
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=cumulative_df[exec_col],
-        y=cumulative_df['Cumulative_PL'],
+        x=_cumulative_df[exec_col],
+        y=_cumulative_df['Cumulative_PL'],
         mode='lines',
         name='累計總盈虧',
         line=dict(color='#2E86AB', width=2)
     ))
     fig.add_trace(go.Scatter(
-        x=cumulative_df[exec_col],
-        y=cumulative_df['Scalper_Cumulative_PL'],
+        x=_cumulative_df[exec_col],
+        y=_cumulative_df['Scalper_Cumulative_PL'],
         mode='lines',
         name=f'Scalper (<{scalper_minutes}分鐘)',
         line=dict(color='#F39C12', width=2, dash='dot')
@@ -451,12 +458,13 @@ def create_client_cumulative_chart(cumulative_df, scalper_minutes):
     return fig
 
 
-def create_stacked_product_chart(product_df, is_profit=True):
+@st.cache_data(show_spinner=False, ttl=1800)
+def create_stacked_product_chart(_product_df, is_profit=True):
     """創建堆疊產品柱狀圖 (Tab 3 用)"""
-    if product_df is None or product_df.empty:
+    if _product_df is None or _product_df.empty:
         return None
 
-    df = product_df.copy()
+    df = _product_df.copy()
     if is_profit:
         non_scalp_color, scalp_color = '#1E8449', '#82E0AA'
         title = '📈 當日盈利產品 Top 5'

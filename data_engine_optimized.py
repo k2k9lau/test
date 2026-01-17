@@ -453,8 +453,11 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
            loss_products if not loss_products.empty else None
 
 
-def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
+@st.cache_data(show_spinner=False, ttl=1800)
+def calculate_deep_behavioral_stats(_client_df, scalper_threshold_seconds):
     """計算深度行為統計 - 優化版"""
+    # Make a copy to avoid modifying the cached input
+    client_df = _client_df.copy()
     side_col = COLUMN_MAP['side']
 
     total_trades = len(client_df)
@@ -571,14 +574,15 @@ def calculate_deep_behavioral_stats(client_df, scalper_threshold_seconds):
     }
 
 
-def get_client_details(df, aid, initial_balance, scalper_threshold_seconds):
+@st.cache_data(show_spinner=False, ttl=1800)
+def get_client_details(_df, aid, initial_balance, scalper_threshold_seconds):
     """獲取客戶詳細資料 (Tab 2 用)"""
     aid_col = COLUMN_MAP['aid']
     exec_col = COLUMN_MAP['execution_time']
     instrument_col = COLUMN_MAP['instrument']
     closed_pl_col = COLUMN_MAP['closed_pl']
 
-    closing_df = filter_closing_trades(df)
+    closing_df = filter_closing_trades(_df)
     client_df = closing_df[closing_df[aid_col] == str(aid)].copy()
     
     if client_df.empty:
@@ -647,19 +651,20 @@ def get_client_ranking(aid_stats_df, aid, metric='Net_PL'):
         return None, len(sorted_df)
 
 
-def export_to_excel(df, aid_stats_df, initial_balance, scalper_threshold_seconds):
+@st.cache_data(show_spinner=False, ttl=1800)
+def export_to_excel(_df, _aid_stats_df, initial_balance, scalper_threshold_seconds):
     """匯出至 Excel - 優化版"""
     from openpyxl.styles import Font, PatternFill, Alignment
     
     output = BytesIO()
-    closing_df = filter_closing_trades(df)
+    closing_df = filter_closing_trades(_df)
     aid_col = COLUMN_MAP['aid']
 
     # Summary
     summary_df = pd.DataFrame([
-        ['總交易筆數', len(df)],
+        ['總交易筆數', len(_df)],
         ['平倉交易筆數', len(closing_df)],
-        ['總客戶數', df[aid_col].nunique()],
+        ['總客戶數', _df[aid_col].nunique()],
         ['總淨盈虧', round(closing_df['Net_PL'].sum(), 2)],
         ['初始資金', initial_balance]
     ], columns=['指標', '數值'])
@@ -668,7 +673,7 @@ def export_to_excel(df, aid_stats_df, initial_balance, scalper_threshold_seconds
     risk_cols = ['AID', 'Net_PL', 'MDD_Pct', 'Sharpe', 'Trade_Count',
                  'Win_Rate', 'Profit_Factor', 'Scalper_Ratio', 'Q1', 'Median', 'Q3']
     
-    risk_return_df = aid_stats_df[risk_cols].sort_values('Net_PL', ascending=False)
+    risk_return_df = _aid_stats_df[risk_cols].sort_values('Net_PL', ascending=False)
 
     # 寫入 Excel (優化: 減少格式設置次數)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
