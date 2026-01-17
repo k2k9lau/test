@@ -595,7 +595,19 @@ def calculate_product_scalp_breakdown(day_df, scalper_threshold_seconds):
         profit_products = profit_products.sort_values('Total_PL', ascending=False)
         loss_products = loss_products.sort_values('Total_PL')
         
-        return profit_products.reset_index(drop=True), loss_products.reset_index(drop=True)
+        # 🔍 調試：確認欄位存在
+        profit_final = profit_products.reset_index(drop=True)
+        loss_final = loss_products.reset_index(drop=True)
+        
+        # 確保只返回需要的欄位，避免多餘欄位干擾
+        required_cols = ['Product', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']
+        
+        if not profit_final.empty:
+            profit_final = profit_final[required_cols]
+        if not loss_final.empty:
+            loss_final = loss_final[required_cols]
+        
+        return profit_final, loss_final
         
     except Exception as e:
         st.error(f"❌ 計算產品分解時發生錯誤: {e}")
