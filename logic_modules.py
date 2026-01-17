@@ -485,26 +485,32 @@ def create_daily_pnl_chart(_df):
     return fig
 
 
-@st.cache_data(show_spinner=False, ttl=1800)
-def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
-    """創建個人累計盈虧圖 (Tab 2 用) - 優化版：圖例置頂、極簡懸浮提示、顯示最終值"""
+def create_client_cumulative_chart(cumulative_df, scalper_minutes):
+    """
+    創建個人累計盈虧圖 (Tab 2 用) - 優化版：圖例置頂、極簡懸浮提示、顯示最終值
+    
+    ⚠️ 移除 @st.cache_data 裝飾器，因為：
+    1. 此函數依賴於動態的 cumulative_df 數據
+    2. 快取會導致顯示舊數據（錯誤日期和累計值）
+    3. Tab 2 的個人報告是按需載入，不需要全局快取
+    """
     exec_col = de.COLUMN_MAP['execution_time']
     
     # 計算最終值用於圖例顯示
-    final_total = _cumulative_df['Cumulative_PL'].iloc[-1] if not _cumulative_df.empty else 0
-    final_scalper = _cumulative_df['Scalper_Cumulative_PL'].iloc[-1] if not _cumulative_df.empty else 0
+    final_total = cumulative_df['Cumulative_PL'].iloc[-1] if not cumulative_df.empty else 0
+    final_scalper = cumulative_df['Scalper_Cumulative_PL'].iloc[-1] if not cumulative_df.empty else 0
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=_cumulative_df[exec_col],
-        y=_cumulative_df['Cumulative_PL'],
+        x=cumulative_df[exec_col],
+        y=cumulative_df['Cumulative_PL'],
         mode='lines',
         name=f'累計總盈虧 (${final_total:,.0f})',
         line=dict(color='#2E86AB', width=2.5)
     ))
     fig.add_trace(go.Scatter(
-        x=_cumulative_df[exec_col],
-        y=_cumulative_df['Scalper_Cumulative_PL'],
+        x=cumulative_df[exec_col],
+        y=cumulative_df['Scalper_Cumulative_PL'],
         mode='lines',
         name=f'Scalper (<{scalper_minutes}分鐘) (${final_scalper:,.0f})',
         line=dict(color='#F39C12', width=2.5, dash='dot')
