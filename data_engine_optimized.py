@@ -206,9 +206,11 @@ def calculate_all_aid_stats_realtime(df, initial_balance, scalper_threshold_seco
     quantiles = closing_df.groupby(aid_col, observed=True)['Net_PL'].quantile([0.25, 0.5, 0.75]).unstack()
     quantiles.columns = ['Q1', 'Median', 'Q3']
     quantiles = quantiles.reset_index()
+    # 確保欄位名稱統一為 'AID'
+    quantiles.columns = ['AID', 'Q1', 'Median', 'Q3']
 
     # 合併基礎統計與百分位數
-    stats = basic_stats.merge(quantiles, on='AID')
+    stats = basic_stats.merge(quantiles, on='AID', how='left')
 
     # 向量化計算衍生指標
     stats['Win_Rate'] = np.where(stats['Trade_Count'] > 0, 
@@ -325,34 +327,46 @@ def calculate_hero_metrics(data_df, initial_balance, scalper_threshold_seconds,
     quantiles.columns = ['Q1', 'Median', 'Q3']
     quantiles['IQR'] = quantiles['Q3'] - quantiles['Q1']
     quantiles = quantiles.reset_index()
+    # 確保欄位名稱統一為 'AID'
+    quantiles.columns = ['AID', 'Q1', 'Median', 'Q3', 'IQR']
     
     grouped = grouped.merge(quantiles, on='AID', how='left')
 
-    # 計算 Profit Expectancy 與 Profit Factor
-    win_loss_stats = []
-    for aid in grouped['AID']:
-        aid_data = closing_df[closing_df[aid_col] == aid]
-        
-        win_trades = aid_data[aid_data['Net_PL'] > 0]['Net_PL']
-        loss_trades = aid_data[aid_data['Net_PL'] < 0]['Net_PL']
-        
-        avg_win = win_trades.mean() if len(win_trades) > 0 else 0
-        avg_loss = abs(loss_trades.mean()) if len(loss_trades) > 0 else 0
-        
-        trade_count = len(aid_data)
-        win_prob = len(win_trades) / trade_count if trade_count > 0 else 0
-        loss_prob = len(loss_trades) / trade_count if trade_count > 0 else 0
-        
-        p_exp = (win_prob * avg_win) - (loss_prob * avg_loss)
-        
-        gains = win_trades.sum() if len(win_trades) > 0 else 0
-        total_losses = abs(loss_trades.sum()) if len(loss_trades) > 0 else 0
-        pf = gains / total_losses if total_losses > 0 else (5.0 if gains > 0 else 0.0)
-        
-        win_loss_stats.append({'AID': aid, 'P_Exp': p_exp, 'PF': pf})
+    # 計算 Profit Expectancy 與 Profit Factor (向量化優化)
+    # 預先計算每個 AID 的獲利與虧損統計
+    win_mask = closing_df['Net_PL'] > 0
+    loss_mask = closing_df['Net_PL'] < 0
     
-    wl_df = pd.DataFrame(win_loss_stats)
-    grouped = grouped.merge(wl_df, on='AID', how='left')
+    win_stats = closing_df[win_mask].groupby(aid_col, observed=True)['Net_PL'].agg(['sum', 'mean', 'count']).reset_index()
+    win_stats.columns = ['AID', 'Win_Sum', 'Avg_Win', 'Win_Count']
+    
+    loss_stats = closing_df[loss_mask].groupby(aid_col, observed=True)['Net_PL'].agg(['sum', 'mean', 'count']).reset_index()
+    loss_stats.columns = ['AID', 'Loss_Sum', 'Avg_Loss', 'Loss_Count']
+    
+    # 合併獲利與虧損統計
+    grouped = grouped.merge(win_stats, on='AID', how='left')
+    grouped = grouped.merge(loss_stats, on='AID', how='left')
+    
+    # 填充缺失值
+    grouped['Win_Sum'] = grouped['Win_Sum'].fillna(0)
+    grouped['Avg_Win'] = grouped['Avg_Win'].fillna(0)
+    grouped['Win_Count'] = grouped['Win_Count'].fillna(0)
+    grouped['Loss_Sum'] = grouped['Loss_Sum'].fillna(0)
+    grouped['Avg_Loss'] = grouped['Avg_Loss'].fillna(0)
+    grouped['Loss_Count'] = grouped['Loss_Count'].fillna(0)
+    
+    # 向量化計算 P_Exp
+    grouped['Win_Prob'] = grouped['Win_Count'] / grouped['Trade_Count']
+    grouped['Loss_Prob'] = grouped['Loss_Count'] / grouped['Trade_Count']
+    grouped['P_Exp'] = (grouped['Win_Prob'] * grouped['Avg_Win']) - (grouped['Loss_Prob'] * grouped['Avg_Loss'].abs())
+    
+    # 向量化計算 PF
+    grouped['Total_Losses'] = grouped['Loss_Sum'].abs()
+    grouped['PF'] = np.where(
+        grouped['Total_Losses'] > 0,
+        grouped['Win_Sum'] / grouped['Total_Losses'],
+        np.where(grouped['Win_Sum'] > 0, 5.0, 0.0)
+    )
 
     # 計算 MDD 與 Recovery Factor
     mdd_rec_stats = []
