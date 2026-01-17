@@ -166,7 +166,7 @@ def clean_aid_input(raw_input: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def create_cumulative_pnl_chart(_df, initial_balance, scalper_threshold_seconds):
-    """創建累計盈虧走勢圖"""
+    """創建累計盈虧走勢圖 - 優化版：圖例置頂、極簡懸浮提示"""
     exec_col = de.COLUMN_MAP['execution_time']
     scalper_minutes = scalper_threshold_seconds / 60
 
@@ -198,7 +198,7 @@ def create_cumulative_pnl_chart(_df, initial_balance, scalper_threshold_seconds)
         mode='lines+markers',
         name='整體累計',
         line=dict(color='#2E86AB', width=2.5),
-        hovertemplate='<b>日期:</b> %{x|%Y-%m-%d}<br><b>累計:</b> $%{y:,.2f}<extra></extra>'
+        marker=dict(size=5)
     ))
     fig.add_trace(go.Scatter(
         x=merged_df['Date'],
@@ -206,17 +206,27 @@ def create_cumulative_pnl_chart(_df, initial_balance, scalper_threshold_seconds)
         mode='lines+markers',
         name=f'Scalper (<{scalper_minutes:.0f}分鐘)',
         line=dict(color='#F39C12', width=2.5, dash='dot'),
-        hovertemplate='<b>日期:</b> %{x|%Y-%m-%d}<br><b>Scalper:</b> $%{y:,.2f}<extra></extra>'
+        marker=dict(size=5)
     ))
     fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.5)
+    
+    # 極簡化懸浮提示：只顯示數值
+    fig.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
+    
     fig.update_layout(
         title='📈 累計淨盈虧走勢',
         xaxis_title='日期',
         yaxis_title='累計淨盈虧 ($)',
         height=450,
-        hovermode='x unified',
-        legend=dict(orientation="h", y=1.02, x=0),
-        margin=dict(l=60, r=30, t=80, b=60),
+        hovermode='x unified',  # 統一懸浮模式
+        legend=dict(
+            orientation="h",     # 水平排列
+            y=1.08,              # 提高位置至圖表區域外
+            x=0,
+            xanchor='left',
+            yanchor='bottom'
+        ),
+        margin=dict(l=60, r=30, t=95, b=60),  # 增加頂部邊距以容納圖例
         plot_bgcolor='rgba(248,249,250,1)'
     )
 
@@ -439,7 +449,7 @@ def create_daily_pnl_chart(_df):
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
-    """創建個人累計盈虧圖 (Tab 2 用)"""
+    """創建個人累計盈虧圖 (Tab 2 用) - 優化版：圖例置頂、極簡懸浮提示"""
     exec_col = de.COLUMN_MAP['execution_time']
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -447,24 +457,34 @@ def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
         y=_cumulative_df['Cumulative_PL'],
         mode='lines',
         name='累計總盈虧',
-        line=dict(color='#2E86AB', width=2),
-        hovertemplate='<b>時間:</b> %{x|%Y-%m-%d %H:%M}<br><b>累計:</b> $%{y:,.2f}<extra></extra>'
+        line=dict(color='#2E86AB', width=2.5)
     ))
     fig.add_trace(go.Scatter(
         x=_cumulative_df[exec_col],
         y=_cumulative_df['Scalper_Cumulative_PL'],
         mode='lines',
         name=f'Scalper (<{scalper_minutes}分鐘)',
-        line=dict(color='#F39C12', width=2, dash='dot'),
-        hovertemplate='<b>時間:</b> %{x|%Y-%m-%d %H:%M}<br><b>Scalper:</b> $%{y:,.2f}<extra></extra>'
+        line=dict(color='#F39C12', width=2.5, dash='dot')
     ))
-    fig.add_hline(y=0, line_dash="dash", line_color="gray")
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.5)
+    
+    # 極簡化懸浮提示：只顯示數值
+    fig.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
+    
     fig.update_layout(
         title='📈 個人累計盈虧',
+        xaxis_title='時間',
+        yaxis_title='累計盈虧 ($)',
         height=350,
-        hovermode='x unified',
-        legend=dict(orientation="h", y=1.05, x=0),
-        margin=dict(l=60, r=30, t=60, b=50),
+        hovermode='x unified',  # 統一懸浮模式
+        legend=dict(
+            orientation="h",     # 水平排列
+            y=1.12,              # 提高位置至圖表區域外
+            x=0,
+            xanchor='left',
+            yanchor='bottom'
+        ),
+        margin=dict(l=60, r=30, t=85, b=50),  # 增加頂部邊距以容納圖例
         plot_bgcolor='rgba(248,249,250,1)'
     )
     return fig
