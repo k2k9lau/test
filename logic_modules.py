@@ -25,15 +25,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.express as px       # 繪圖必備
+import plotly.graph_objects as go # 繪圖必備
 from typing import Dict, Any, Optional, Tuple
-from dataclasses import dataclass, field, a
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px       # 新增
-import plotly.graph_objects as go # 新增
-from typing import Dict, Any, Optional, Tuple
-from dataclasses import dataclass, field, asdict  # 這裡原本被截斷了，請補全
+from dataclasses import dataclass, field, asdict  # 確保 asdict 完整
 
 # ============================================================
 #                    資料類別定義
