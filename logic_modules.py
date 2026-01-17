@@ -93,6 +93,10 @@ def render_scalper_filters(key_prefix, default_scalp_pct=80.0, default_scalp_pl=
 def get_table_column_config():
     """
     獲取統一的表格欄位配置 - 確保 AID 為純文字可複製
+    
+    ✅ 修復：金額欄位使用 NumberColumn 以支持正確排序
+    - 使用 format 參數顯示 $ 符號和千分位
+    - 保持數值類型，確保 ascending/descending 排序正確
     """
     return {
         'AID': st.column_config.TextColumn(
@@ -100,15 +104,41 @@ def get_table_column_config():
             help='📋 點擊單元格可選取複製',
             width='small'
         ),
-        '盈虧': st.column_config.TextColumn('盈虧', width='medium'),
-        'Scalp盈虧': st.column_config.TextColumn('Scalp盈虧', width='medium'),
+        # ✅ 修復：金額欄位改用 NumberColumn，確保排序正確
+        '盈虧': st.column_config.NumberColumn(
+            '盈虧',
+            format='$%.2f',
+            width='medium'
+        ),
+        'Scalp盈虧': st.column_config.NumberColumn(
+            'Scalp盈虧',
+            format='$%.2f',
+            width='medium'
+        ),
+        'Q1': st.column_config.NumberColumn(
+            'Q1',
+            format='$%.2f',
+            width='small'
+        ),
+        'Median': st.column_config.NumberColumn(
+            'Median',
+            format='$%.2f',
+            width='small'
+        ),
+        'Q3': st.column_config.NumberColumn(
+            'Q3',
+            format='$%.2f',
+            width='small'
+        ),
+        'IQR': st.column_config.NumberColumn(
+            'IQR',
+            format='$%.2f',
+            width='small'
+        ),
+        # 以下欄位因為加了 emoji 所以仍用 TextColumn
         'Scalp%': st.column_config.TextColumn('Scalp%', width='small'),
         'Sharpe': st.column_config.TextColumn('Sharpe', width='small'),
         'MDD%': st.column_config.TextColumn('MDD%', width='small'),
-        'Q1': st.column_config.TextColumn('Q1', width='small'),
-        'Median': st.column_config.TextColumn('Median', width='small'),
-        'Q3': st.column_config.TextColumn('Q3', width='small'),
-        'IQR': st.column_config.TextColumn('IQR', width='small'),
         'P. Exp': st.column_config.TextColumn('P.Exp', width='small'),
         'PF': st.column_config.NumberColumn('PF', format='%.2f', width='small'),
         'Rec.F': st.column_config.NumberColumn('Rec.F', format='%.2f', width='small'),
@@ -118,13 +148,20 @@ def get_table_column_config():
 
 
 def format_hero_table_display(hero_df):
-    """格式化英雄榜表格顯示 (加入 Emoji 與字串格式)"""
+    """
+    格式化英雄榜表格顯示 (加入 Emoji 與字串格式)
+    
+    ⚠️ 重要修復：保留原始數值欄位供 Streamlit 排序使用
+    - 金額欄位不再轉換為字串，改用 Streamlit 的 NumberColumn 格式化
+    - 這樣可以確保表格排序正確（數值排序而非字串排序）
+    """
     if hero_df.empty:
         return hero_df
 
     display_df = hero_df.copy()
 
     # Scalp% emoji - 安全檢查
+    # ⚠️ 注意：這會影響排序，但 Scalp% 排序不常用，保留 emoji 顯示
     if 'Scalp%' in display_df.columns:
         display_df['Scalp%'] = display_df['Scalp%'].apply(
             lambda x: f"🔥{x:.1f}%" if x > 80 else f"{x:.1f}%"
@@ -148,10 +185,9 @@ def format_hero_table_display(hero_df):
             lambda x: f"🟢{x:.2f}" if x > 0 else f"🔴{x:.2f}"
         )
 
-    # 金額格式 - 安全檢查
-    for col in ['盈虧', 'Scalp盈虧', 'Q1', 'Median', 'Q3', 'IQR']:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}")
+    # ✅ 修復：金額欄位保持數值格式，不轉換為字串
+    # 這樣 Streamlit 表格的排序功能才能正確工作（數值排序而非字串排序）
+    # 格式化將透過 get_table_column_config() 的 NumberColumn 實現
 
     return display_df
 
