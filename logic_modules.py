@@ -27,8 +27,13 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field, a
-import plotly.express as px
-import plotly.graph_objects as go
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px       # 新增
+import plotly.graph_objects as go # 新增
+from typing import Dict, Any, Optional, Tuple
+from dataclasses import dataclass, field, asdict  # 這裡原本被截斷了，請補全
 
 # ============================================================
 #                    資料類別定義
