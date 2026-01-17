@@ -810,6 +810,9 @@ def get_client_details(_df, aid, initial_balance, scalper_threshold_seconds):
         client_sorted['Scalper_PL'] = np.where(scalper_mask, client_sorted['Net_PL'], 0)
         client_sorted['Scalper_Cumulative_PL'] = client_sorted['Scalper_PL'].cumsum()
         
+        # 計算 Scalper 最終累計值（用於一致性驗證）
+        scalper_final_pl = float(client_sorted['Scalper_Cumulative_PL'].iloc[-1]) if not client_sorted.empty else 0
+        
         # Symbol 分佈 - ✅ 加上 reset_index()
         if instrument_col in client_df.columns:
             symbol_dist = (
@@ -832,6 +835,7 @@ def get_client_details(_df, aid, initial_balance, scalper_threshold_seconds):
             'profit_factor': profit_factor,
             'sharpe': sharpe,
             'mdd_pct': mdd_pct,
+            'scalper_final_pl': scalper_final_pl,  # 新增：Scalper累計最終值
             'cumulative_df': client_sorted[[exec_col, 'Cumulative_PL', 'Scalper_Cumulative_PL']],
             'symbol_dist': symbol_dist,
             'client_df': client_df,

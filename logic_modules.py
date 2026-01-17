@@ -487,21 +487,26 @@ def create_daily_pnl_chart(_df):
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def create_client_cumulative_chart(_cumulative_df, scalper_minutes):
-    """創建個人累計盈虧圖 (Tab 2 用) - 優化版：圖例置頂、極簡懸浮提示"""
+    """創建個人累計盈虧圖 (Tab 2 用) - 優化版：圖例置頂、極簡懸浮提示、顯示最終值"""
     exec_col = de.COLUMN_MAP['execution_time']
+    
+    # 計算最終值用於圖例顯示
+    final_total = _cumulative_df['Cumulative_PL'].iloc[-1] if not _cumulative_df.empty else 0
+    final_scalper = _cumulative_df['Scalper_Cumulative_PL'].iloc[-1] if not _cumulative_df.empty else 0
+    
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=_cumulative_df[exec_col],
         y=_cumulative_df['Cumulative_PL'],
         mode='lines',
-        name='累計總盈虧',
+        name=f'累計總盈虧 (${final_total:,.0f})',
         line=dict(color='#2E86AB', width=2.5)
     ))
     fig.add_trace(go.Scatter(
         x=_cumulative_df[exec_col],
         y=_cumulative_df['Scalper_Cumulative_PL'],
         mode='lines',
-        name=f'Scalper (<{scalper_minutes}分鐘)',
+        name=f'Scalper (<{scalper_minutes}分鐘) (${final_scalper:,.0f})',
         line=dict(color='#F39C12', width=2.5, dash='dot')
     ))
     fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.5)

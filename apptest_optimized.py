@@ -430,7 +430,7 @@ def main():
 
                     # 核心指標
                     st.markdown("### 🎯 核心指標")
-                    c1, c2, c3, c4, c5, c6 = st.columns(6)
+                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
                     pl_icon = "🟢" if client_data['net_pl'] >= 0 else "🔴"
                     c1.metric(f"{pl_icon} 總盈虧", f"${client_data['net_pl']:,.2f}")
                     c2.metric("🎯 勝率", f"{client_data['win_rate']:.1f}%")
@@ -439,6 +439,10 @@ def main():
                     mdd_icon = "🔴" if client_data['mdd_pct'] > 20 else ""
                     c5.metric(f"{mdd_icon}MDD%", f"{client_data['mdd_pct']:.1f}%")
                     c6.metric("📝 筆數", f"{client_data['trade_count']}")
+                    # 新增：剝頭皮盈虧和剝頭皮%
+                    scalp_pl_icon = "🟢" if behavioral['scalp_pl'] >= 0 else "🔴"
+                    c7.metric(f"{scalp_pl_icon} Scalp盈虧", f"${behavioral['scalp_pl']:,.2f}")
+                    c8.metric("⚡ Scalp%", f"{behavioral['scalp_ratio']:.1f}%")
 
                     # Box Plot 指標
                     st.markdown("### 📦 盈虧分佈統計")
@@ -463,11 +467,18 @@ def main():
 
                     with ba2:
                         st.markdown("#### 剝頭皮診斷")
+                        # 使用與圖表一致的 scalper_final_pl 計算盈虧貢獻
+                        scalp_final = client_data.get('scalper_final_pl', behavioral['scalp_pl'])
+                        scalp_contrib_consistent = (scalp_final / client_data['net_pl'] * 100) if client_data['net_pl'] != 0 else 0
+                        # 計算非 Scalp 盈虧
+                        non_scalp_pl = client_data['net_pl'] - scalp_final
                         st.dataframe(pd.DataFrame({
-                            '指標': ['Scalp%', '盈虧貢獻', 'Scalp勝率'],
+                            '指標': ['Scalp%', 'Scalp盈虧', 'Non-Scalp盈虧', '盈虧貢獻', 'Scalp勝率'],
                             '數值': [
                                 f"{behavioral['scalp_ratio']:.1f}%",
-                                f"{behavioral['scalp_contribution']:.1f}%",
+                                f"${scalp_final:,.2f}",
+                                f"${non_scalp_pl:,.2f}",
+                                f"{scalp_contrib_consistent:.1f}%",
                                 f"{behavioral['scalp_winrate']:.1f}%"
                             ]
                         }), use_container_width=True, hide_index=True)
