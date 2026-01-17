@@ -630,10 +630,14 @@ COLOR_MAP = {
 }
 
 
-@st.cache_data(show_spinner=False, ttl=1800)
 def plot_top_products_bar(_product_df, is_profit=True, top_n=5):
     """
     創建個人 Top N 產品水平條形圖 (Tab 2 用) - 優化版：視野優化 + Tooltip 優化
+    
+    ⚠️ 移除 @st.cache_data 裝飾器，因為：
+    1. 此函數依賴於動態的 _product_df 數據（每個客戶不同）
+    2. 快取會導致顯示錯誤客戶的數據
+    3. Tab 2 的個人報告是按需載入，不需要全局快取
     
     參數:
         _product_df: 產品盈虧 DataFrame，包含 ['Symbol', 'Scalp_PL', 'NonScalp_PL', 'Total_PL']

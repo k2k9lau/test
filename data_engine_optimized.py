@@ -930,10 +930,14 @@ def export_to_excel(_df, _aid_stats_df, initial_balance, scalper_threshold_secon
 
 # ==================== 新增：個人產品盈虧分析 (Tab 2) ====================
 
-@st.cache_data(show_spinner=False, ttl=1800)
 def calculate_client_product_breakdown(_client_df, scalper_threshold_seconds):
     """
     計算單一客戶的產品級別盈虧分解 (含 Scalp 分類)
+    
+    ⚠️ 移除 @st.cache_data 裝飾器，因為：
+    1. 此函數依賴於動態的 _client_df 數據（每個客戶不同）
+    2. 快取會導致顯示錯誤客戶的數據
+    3. Tab 2 的個人報告是按需載入，不需要全局快取
     
     參數:
         _client_df: 單一 AID 的交易數據 DataFrame
