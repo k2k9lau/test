@@ -480,7 +480,7 @@ def calculate_hero_metrics(
         mask &= (hero_stats['Scalper_PL'] >= min_scalp_pl)
         
         result = hero_stats[mask].copy()
-        result = result.sort_values('Net_PL', ascending=False).head(20)
+        result = result.sort_values('Net_PL', ascending=False)
         
         # 數值格式化
         for col in ['Net_PL', 'Scalper_PL', 'Gains', 'Losses', 'Sharpe']:

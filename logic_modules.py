@@ -95,6 +95,7 @@ def get_table_column_config():
     獲取統一的表格欄位配置 - 確保 AID 為純文字可複製
     
     ✅ 修復：金額欄位使用 NumberColumn 以支持正確排序
+    ✅ 優化：縮小欄位寬度，讓所有參數一眼可見
     - 使用 format 參數顯示 $ 符號和千分位
     - 保持數值類型，確保 ascending/descending 排序正確
     """
@@ -102,48 +103,48 @@ def get_table_column_config():
         'AID': st.column_config.TextColumn(
             'AID',
             help='📋 點擊單元格可選取複製',
-            width='small'
+            width=85
         ),
         # ✅ 修復：金額欄位改用 NumberColumn，確保排序正確
         '盈虧': st.column_config.NumberColumn(
             '盈虧',
             format='$%.2f',
-            width='medium'
+            width=90
         ),
         'Scalp盈虧': st.column_config.NumberColumn(
             'Scalp盈虧',
             format='$%.2f',
-            width='medium'
+            width=90
         ),
         'Q1': st.column_config.NumberColumn(
             'Q1',
             format='$%.2f',
-            width='small'
+            width=75
         ),
         'Median': st.column_config.NumberColumn(
             'Median',
             format='$%.2f',
-            width='small'
+            width=80
         ),
         'Q3': st.column_config.NumberColumn(
             'Q3',
             format='$%.2f',
-            width='small'
+            width=75
         ),
         'IQR': st.column_config.NumberColumn(
             'IQR',
             format='$%.2f',
-            width='small'
+            width=75
         ),
         # 以下欄位因為加了 emoji 所以仍用 TextColumn
-        'Scalp%': st.column_config.TextColumn('Scalp%', width='small'),
-        'Sharpe': st.column_config.TextColumn('Sharpe', width='small'),
-        'MDD%': st.column_config.TextColumn('MDD%', width='small'),
-        'P. Exp': st.column_config.TextColumn('P.Exp', width='small'),
-        'PF': st.column_config.NumberColumn('PF', format='%.2f', width='small'),
-        'Rec.F': st.column_config.NumberColumn('Rec.F', format='%.2f', width='small'),
-        '勝率%': st.column_config.NumberColumn('勝率%', format='%.1f%%', width='small'),
-        '筆數': st.column_config.NumberColumn('筆數', format='%d', width='small')
+        'Scalp%': st.column_config.TextColumn('Scalp%', width=65),
+        'Sharpe': st.column_config.TextColumn('Sharpe', width=60),
+        'MDD%': st.column_config.TextColumn('MDD%', width=60),
+        'P. Exp': st.column_config.TextColumn('P.Exp', width=70),
+        'PF': st.column_config.NumberColumn('PF', format='%.2f', width=50),
+        'Rec.F': st.column_config.NumberColumn('Rec.F', format='%.2f', width=55),
+        '勝率%': st.column_config.NumberColumn('勝率%', format='%.1f%%', width=60),
+        '筆數': st.column_config.NumberColumn('筆數', format='%d', width=50)
     }
 
 

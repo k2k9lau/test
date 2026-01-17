@@ -291,8 +291,8 @@ def main():
 
             st.markdown("---")
 
-            # 6. Top 20 盈利英雄榜
-            st.markdown("### 🏆 Top 20 歷史盈利英雄榜")
+            # 6. 歷史盈利客戶表格
+            st.markdown("### 🏆 客戶表格")
             st.caption("💡 **點擊表格中的 AID 可選取複製,貼到 Tab 2 搜尋框即可查看詳情**")
 
             min_pnl_h1, min_wr_h1, min_sharpe_h1, max_mdd_h1 = lm.render_global_filters(
@@ -322,8 +322,8 @@ def main():
 
             st.markdown("---")
 
-            # 7. Top 20 Scalper 英雄榜
-            st.markdown("### 🔥 Top 20 歷史 Scalper 英雄榜")
+            # 7. 歷史 Scalper 客戶表格
+            st.markdown("### 🔥 剝頭皮客戶表格")
             min_scalp_pct_h, min_scalp_pl_h = lm.render_scalper_filters("hist_scalp", 80.0, 0.0)
             min_pnl_hs, min_wr_hs, min_sharpe_hs, max_mdd_hs = lm.render_global_filters(
                 "hist_scalp_g", 0.0, 0.0, -10.0, 100.0
@@ -350,7 +350,7 @@ def main():
                     column_config=lm.get_table_column_config()
                 )
             else:
-                st.info("無符合條件的 Scalper")
+                st.info("無符合條件的剝頭皮客戶")
                 
         except Exception as e:
             st.error(f"❌ Tab 1 顯示時發生錯誤: {e}")
@@ -573,8 +573,8 @@ def main():
 
                 st.markdown("---")
 
-                # 當日盈利英雄榜
-                st.markdown("### 🏆 Top 20 當日盈利英雄榜")
+                # 當日盈利客戶表格
+                st.markdown("### 🏆 當日客戶表格")
                 min_pnl_d1, min_wr_d1, min_sharpe_d1, max_mdd_d1 = lm.render_global_filters(
                     "daily_hero", 0.0, 0.0, -10.0, 100.0
                 )
@@ -599,18 +599,18 @@ def main():
                     )
                     csv_data = daily_hero.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(
-                        "📥 下載盈利榜 CSV",
+                        "📥 下載當日客戶 CSV",
                         data=csv_data,
                         file_name=f"daily_hero_{latest_date}.csv",
                         mime="text/csv"
                     )
                 else:
-                    st.info("當日無盈利客戶")
+                    st.info("當日無盈利客戶符合條件")
 
                 st.markdown("---")
 
-                # 當日 Scalper 英雄榜
-                st.markdown("### 🔥 Top 20 當日 Scalper 英雄榜")
+                # 當日 Scalper 客戶表格
+                st.markdown("### 🔥 當日剝頭皮客戶表格")
                 min_scalp_pct_d, min_scalp_pl_d = lm.render_scalper_filters("daily_scalp", 80.0, 0.0)
                 min_pnl_ds, min_wr_ds, min_sharpe_ds, max_mdd_ds = lm.render_global_filters(
                     "daily_scalp_g", 0.0, 0.0, -10.0, 100.0
@@ -638,13 +638,13 @@ def main():
                     )
                     csv_scalp = daily_scalp.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(
-                        "📥 下載 Scalper 榜 CSV",
+                        "📥 下載剝頭皮客戶 CSV",
                         data=csv_scalp,
                         file_name=f"scalper_{latest_date}.csv",
                         mime="text/csv"
                     )
                 else:
-                    st.info("當日無符合條件的 Scalper")
+                    st.info("當日無符合條件的剝頭皮客戶")
                     
         except Exception as e:
             st.error(f"❌ Tab 3 顯示時發生錯誤: {e}")
